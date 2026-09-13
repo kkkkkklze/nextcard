@@ -1,0 +1,21 @@
+All Rights Reserved
+
+Copyright (c) 2026 <your name>
+
+This work (the mod "examplemod" and all sources in this repository) is
+proprietary. No part of it may be copied, modified, distributed, published or
+used in derivative works without prior written permission from the copyright
+holder.
+
+This matches the `mod_license` value in gradle.properties / META-INF/mods.toml.
+If you intend to publish this mod, pick a license instead of leaving it
+All Rights Reserved - see https://choosealicense.com/ for a comparison, then
+update this file, `gradle.properties` (mod_license) and, if applicable,
+`TEMPLATE_LICENSE.txt`:
+
+- MIT / Apache-2.0 - permissive, easiest for packs and forks
+- LGPL-2.1 / GPL-3.0 - the license the MinecraftForge/NeoForge loader itself uses
+- MPL-2.0 / CC-BY-NC-SA - other common mod licenses
+
+The build tooling copied from NeoForged's MDK keeps its own license, see
+TEMPLATE_LICENSE.txt.

@@ -12,14 +12,29 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Setup JDK 21
+      # JDK 17 to match the mod's toolchain (Minecraft 1.20.1 runs on Java 17).
+      - name: Setup JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
+          java-version: '17'
           distribution: 'temurin'
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build with Gradle
+      # Runs compile + unit tests + reobfuscation. The unit tests only run here and on other
+      # ASCII paths - see the comment on the test task in build.gradle (Windows + non-ASCII path).
+      - name: Build
         run: ./gradlew build
+
+      # GameTests boot a real server and check that the mod's registries and content are populated.
+      # Separate step so a game failure is easy to tell apart from a compile failure.
+      - name: GameTests
+        run: ./gradlew runGameTestServer
+
+      - name: Upload mod jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: mod-jar
+          path: build/libs/*.jar
+          if-no-files-found: error
