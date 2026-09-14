@@ -3,6 +3,8 @@ package com.example.examplemod.mixin;
 import com.example.examplemod.ExampleMod;
 import com.example.examplemod.common.config.ModCommonConfig;
 import com.example.examplemod.common.util.TickUtils;
+import com.llamalad7.mixinextras.injector.wrapoperation.Operation;
+import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation;
 import net.minecraft.world.entity.player.Player;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -34,5 +36,23 @@ public class PlayerTickMixin {
             ExampleMod.LOGGER.info("[{}] tick demo: {} at {}",
                     ExampleMod.MODID, self.getName().getString(), self.blockPosition());
         }
+    }
+
+    /**
+     * MixinExtras demo: {@code @WrapOperation} is the signature-safe replacement for the classic
+     * {@code @Redirect} - you receive the receiver, the call arguments and a callable {@code original}
+     * instead of having to match a raw descriptor.
+     *
+     * <p>This wraps the first {@code isSpectator()} call inside {@code tick()} and returns the
+     * original value, so behaviour is unchanged; put your own logic in the body (you may call
+     * {@code original.call(instance)} more than once, which is impossible with {@code @Redirect}).
+     * MixinExtras is bundled with the mod through {@code jarJar} (see build.gradle) so no separate
+     * download is needed at runtime.</p>
+     */
+    @WrapOperation(
+            method = "tick",
+            at = @At(value = "INVOKE", target = "Lnet/minecraft/world/entity/player/Player;isSpectator()Z", ordinal = 0))
+    private boolean examplemod$wrapSpectatorCheck(Player instance, Operation<Boolean> original) {
+        return original.call(instance);
     }
 }

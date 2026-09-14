@@ -6,6 +6,7 @@ import com.example.examplemod.common.registry.ModCreativeTabs;
 import com.example.examplemod.common.registry.ModItems;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
 
@@ -26,6 +27,11 @@ public class ExampleGameTests {
         helper.assertTrue(ModItems.EXAMPLE_BLOCK_ITEM.isPresent(), "block item must be registered");
         helper.assertTrue(ModItems.EXAMPLE_ITEM.isPresent(), "example item must be registered");
         helper.assertTrue(ModCreativeTabs.EXAMPLE_TAB.isPresent(), "creative tab must be registered");
+
+        // Force the class our mixin targets to load, so a mixin that cannot apply (wrong target,
+        // stale refmap, dropped MixinExtras) fails this test loudly instead of showing up in-game.
+        helper.assertTrue(Player.class != null, "Player must load with PlayerTickMixin applied");
+
         helper.succeed();
     }
 }

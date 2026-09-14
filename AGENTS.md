@@ -14,7 +14,8 @@
 | 平台 | Minecraft **1.20.1** / **MinecraftForge 47.4.23** |
 | Java | 17（`java.toolchain.languageVersion`；本机 JDK 路径见 `gradle.properties`） |
 | Gradle | 8.14.3（wrapper 指向腾讯云镜像） |
-| 构建插件 | ModDevGradle Legacy `net.neoforged.moddev.legacyforge` 2.0.147 |
+| 构建插件 | ModDevGradle Legacy `net.neoforged.moddev.legacyforge` 2.0.147（版本在 `gradle/libs.versions.toml`） |
+| 内嵌库 | MixinExtras 0.4.1（`jarJar` 打进 jar，`META-INF/jarjar/`） |
 | mod id | `examplemod`（改名前先看 README 第五节） |
 | 主包 | `com.example.examplemod` |
 | 混淆 | 1.20.1 生产用 SRG 名，`build/libs` 是重混淆后的可发布 jar，`build/devlibs` 是开发版 |
@@ -27,6 +28,7 @@
 ./gradlew runServer             # 开发服务端（首次需自己在 run/eula.txt 同意 EULA）
 ./gradlew runData               # 数据生成 → 写入 src/generated/resources（必须提交）
 ./gradlew runGameTestServer     # 跑 GameTest，全过才退出码 0
+./gradlew publishMods           # 发 CurseForge/Modrinth：id 填在 gradle.properties，token 走环境变量，id 空则跳过
 ./gradlew clean                 # 清理构建产物
 ```
 
@@ -52,11 +54,13 @@ src/main/java/com/example/examplemod/
 ## 写代码时的硬性约定
 
 1. **新增内容按注册表拆类**，主类只加一行 `ModXxx.register(modEventBus)`。方块要配 `ModItems.registerBlockItem(...)`，否则进游戏是空物品。
-2. **客户端代码只能放 `client/`**；common 里调用客户端逻辑必须走 `DistExecutor`，事件订阅者用 `value = Dist.CLIENT`。
-3. **能用 Access Transformer 就别写 Mixin**；写 Mixin 时保证 `<mod_id>.mixins.json` 里 `defaultRequire: 1`，让注入失败直接报错而不是静默失效。
-4. **datagen 优先**：模型、语言、战利品表、配方、标签都写 provider，不要手写 json。
-5. **1.20.1 的网络是 `SimpleChannel`**（`ModNetwork`），不要照抄 1.20.2+ 教程里的 `CustomPacketPayload`/`PayloadRegistrar`。协议版本变更时必须双向校验并升版本。
-6. 发布前 `./gradlew runGameTestServer` 必须全绿。
+2. **版本号写 `gradle/libs.versions.toml`**（构建工具：插件/JUnit/MixinExtras）；**模组元数据写 `gradle.properties`**（`mod_id`/`mod_name`/`minecraft_version`/`forge_version` 等，会被注入 `mods.toml`，别挪到 catalog）。catalog 不支持 classifier，mixin 注解处理器的 `:processor` 只能字面写。
+3. **客户端代码只能放 `client/`**；common 里调用客户端逻辑必须走 `DistExecutor`，事件订阅者用 `value = Dist.CLIENT`。
+4. **能用 Access Transformer 就别写 Mixin**；写 Mixin 时保证 `<mod_id>.mixins.json` 里 `defaultRequire: 1`，让注入失败直接报错而不是静默失效。
+5. **MixinExtras 已内嵌**（`jarJar`）：新写注入器优先用 `@WrapOperation`/`@ModifyExpressionValue` 而不是 `@Redirect`（签名安全、可多次调用原方法）；用它的注入器**必须**保留 `annotationProcessor libs.mixinextras.common`，否则 refmap 缺条目、运行期注入失败。
+6. **datagen 优先**：模型、语言、战利品表、配方、标签都写 provider，不要手写 json。
+7. **1.20.1 的网络是 `SimpleChannel`**（`ModNetwork`），不要照抄 1.20.2+ 教程里的 `CustomPacketPayload`/`PayloadRegistrar`。协议版本变更时必须双向校验并升版本。
+8. 发布前 `./gradlew runGameTestServer` 必须全绿；发布只发 `build/libs`（重混淆版），**不要发 `build/devlibs`**。
 
 ## 不要手改的路径
 

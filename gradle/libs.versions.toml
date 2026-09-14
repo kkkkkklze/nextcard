@@ -1,0 +1,30 @@
+# Gradle version catalog - single place for every build-tooling version.
+#
+# Scope: only the *tooling* dependencies live here. Mod metadata (mod_id, mod_name, minecraft_version,
+# forge_version, ...) stays in gradle.properties because those values are injected into
+# src/main/templates/META-INF/mods.toml by the generateModMetadata task.
+#
+# Note: version catalogs cannot express artifact classifiers, so
+# org.spongepowered:mixin:0.8.5:processor is still spelled out in build.gradle.
+
+[versions]
+# Build toolchain
+moddevLegacyforge = "2.0.147"
+modPublish = "2.2.0"
+
+# Libraries
+mixin = "0.8.5"
+# 0.4.1 is the version the 1.20.1 ecosystem is built against (ModernFix etc.); newer lines target
+# newer Minecraft versions.
+mixinextras = "0.4.1"
+junit = "5.9.3"
+
+[libraries]
+mixin-processor = { module = "org.spongepowered:mixin", version.ref = "mixin" }
+mixinextras-common = { module = "io.github.llamalad7:mixinextras-common", version.ref = "mixinextras" }
+mixinextras-forge = { module = "io.github.llamalad7:mixinextras-forge", version.ref = "mixinextras" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter", version.ref = "junit" }
+
+[plugins]
+moddev-legacyforge = { id = "net.neoforged.moddev.legacyforge", version.ref = "moddevLegacyforge" }
+mod-publish = { id = "me.modmuss50.mod-publish-plugin", version.ref = "modPublish" }

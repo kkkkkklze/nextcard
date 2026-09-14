@@ -23,6 +23,7 @@
 ./gradlew runServer             # 开发服务端（首次需自行在 run/eula.txt 同意 EULA）
 ./gradlew runData               # 数据生成 → src/generated/resources（生成物要提交）
 ./gradlew runGameTestServer     # GameTest，全过才退出码 0
+./gradlew publishMods           # 发布到 CurseForge/Modrinth（需先填 id 与 token，见第七节）
 ./gradlew clean
 ```
 
@@ -50,7 +51,8 @@ Windows 用 `gradlew.bat`。首次构建 5~15 分钟（下载 MC + 反编译重�
 forge-1.20.1-mod-2/
 ├── AGENTS.md                     # 给 AI 协作者/新人的说明（目录约定、硬性规则、已知问题）
 ├── build.gradle                  # 工具链、镜像仓库、run 配置、mixin、datagen、测试
-├── gradle.properties             # 版本号、模组元数据、JDK17 路径
+├── gradle.properties             # 模组元数据与版本号（会被注入 mods.toml）、JDK17 路径
+├── gradle/libs.versions.toml      # 构建工具版本（MDG 插件、发布插件、JUnit、MixinExtras）
 ├── LICENSE                       # 与 mods.toml 的 license 一致（默认 All Rights Reserved）
 ├── .github/workflows/build.yml   # CI：build + runGameTestServer + 上传 jar
 ├── run/gameteststructures/       # GameTest 结构（手写 SNBT，必须提交）
@@ -89,6 +91,17 @@ forge-1.20.1-mod-2/
    生态里真正有测试的 1.20.1 仓库不到 8%，这是最容易拉开差距的一项。
 8. **CI**：GitHub Actions 跑 `build` + `runGameTestServer` 并上传 jar。
 9. **AGENTS.md**：写清目录约定、硬性规则、"不要手改的路径"和已知环境问题，方便 AI 协作。
+10. **版本目录**：`gradle/libs.versions.toml` 统一管理构建工具版本（MDG/发布插件/JUnit/MixinExtras）。
+    分工是：**工具版本进 catalog，模组元数据留在 gradle.properties**（后者要注入 `mods.toml`）。
+    注意 catalog 不支持 classifier，`org.spongepowered:mixin:0.8.5:processor` 仍在 build.gradle 里字面写。
+11. **MixinExtras 已内嵌**：`jarJar` 把 `mixinextras-forge` 打进 jar（`META-INF/jarjar/`），
+    这样多个 mod 用 MixinExtras 时共享同一版本而不是各自塞一份；示例用 `@WrapOperation` 包了
+    `Player#tick` 里的 `isSpectator()` 调用（返回原值，行为不变），演示这个"`@Redirect` 的签名安全替代"。
+    **注意**：用 MixinExtras 的注入器必须挂 `annotationProcessor libs.mixinextras.common`，
+    否则 refmap 里不会有对应条目（本项目已配好，refmap 里能看到 `isSpectator()Z → m_5833_()Z`）。
+12. **发布流程**：`gradlew publishMods` 一把发 CurseForge + Modrinth（`me.modmuss50.mod-publish-plugin`）。
+    project id 填在 `gradle.properties`，access token 走环境变量，**id 留空即跳过该平台**，
+    所以 `gradlew build` 永远不需要 token。发布的文件固定取 `jar` 任务产物（即 `build/libs` 里重混淆后的那份）。
 
 ## 五、已知环境问题：工程路径含中文时单测会被跳过
 
@@ -120,9 +133,25 @@ mklink /J C:\mcdev "C:\Users\Administrator\Documents\开发\mod"
 
 ## 七、发布
 
-`./gradlew build` 后把 **`build/libs/examplemod-1.0.0.jar`**（已 SRG 重混淆）丢进 `mods/` 目录即可，
-客户端需要同 MC 版本的 Forge 1.20.1。`build/devlibs/` 里的同名 jar 只用于开发环境，不要发布。
-发布流程（CurseForge / Modrinth）可接 `me.modmuss50.mod-publish-plugin`，本模板暂未启用。
+`./gradlew build` 后把 **`build/libs/examplemod-1.0.0.jar`**（已 SRG 重混淆，且内嵌了 MixinExtras）丢进
+`mods/` 目录即可，客户端需要同 MC 版本的 Forge 1.20.1。`build/devlibs/` 里的同名 jar 只用于开发环境，不要发布。
+
+发到平台上：
+
+```properties
+# gradle.properties
+curseforge_project_id=123456
+modrinth_project_id=AbCdEfGh
+```
+
+```bash
+export CURSEFORGE_TOKEN=...      # 平台后台生成的 API token
+export MODRINTH_TOKEN=...
+export CHANGELOG="..."           # 可选，默认占位文案
+./gradlew publishMods
+```
+
+只填一个 id 就只发一个平台；两个都留空时 `publishMods` 什么也不做（也不会报错）。
 
 ## 八、参考
 

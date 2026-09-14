@@ -1,8 +1,12 @@
+import me.modmuss50.mpp.ReleaseType
+
 plugins {
     id 'idea'
     id 'java-library'
     id 'maven-publish'
-    id 'net.neoforged.moddev.legacyforge' version '2.0.147'
+    // Versions come from gradle/libs.versions.toml.
+    alias(libs.plugins.moddev.legacyforge)
+    alias(libs.plugins.mod.publish)
 }
 
 tasks.named('wrapper', Wrapper).configure {
@@ -187,12 +191,24 @@ dependencies {
     // Unit tests (src/test/java). Keep them free of Minecraft classes so they run with plain
     // `gradlew test`; anything that needs a live game belongs in a GameTest instead
     // (src/main/java/.../gametest, run with `gradlew runGameTestServer`).
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.9.3'
+    testImplementation libs.junit.jupiter
 
     // Required by the mixin block above: this annotation processor generates the refmap that
     // `reobfJar` needs. Remove it and the build fails with a missing
     // build/mixin/<mod_id>.refmap.json.mappings.tsrg.
+    // (Spelled out rather than taken from the version catalog - catalogs cannot express the
+    // ":processor" classifier.)
     annotationProcessor 'org.spongepowered:mixin:0.8.5:processor'
+
+    // --- MixinExtras -------------------------------------------------------------------------
+    // Bundled with the mod so that every mod using MixinExtras shares one version at runtime
+    // instead of shipping conflicting copies (the ecosystem convention on 1.20.1).
+    // `common` provides the annotations/injectors at compile time, `forge` is the runtime part,
+    // and `jarJar` embeds that runtime jar into our jar (META-INF/jarjar/...).
+    implementation libs.mixinextras.common
+    annotationProcessor libs.mixinextras.common
+    implementation libs.mixinextras.forge
+    jarJar libs.mixinextras.forge
 }
 
 // Known environment limitation (Windows + non-ASCII project path): gradle hands the test worker its
@@ -265,6 +281,46 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
 sourceSets.main.resources.srcDir generateModMetadata
 // To avoid having to run "generateModMetadata" manually, make it run on every project reload
 legacyForge.ideSyncTask generateModMetadata
+
+// ---------------------------------------------------------------------------
+// Publishing to mod hosting platforms: `gradlew publishMods`
+//
+//   gradle.properties : curseforge_project_id / modrinth_project_id  (empty = that platform is skipped)
+//   environment       : CURSEFORGE_TOKEN / MODRINTH_TOKEN, optional CHANGELOG
+//
+// Because an empty project id skips the platform, `gradlew build` never needs any token, and
+// publishing is opt-in per machine.
+// ---------------------------------------------------------------------------
+def mcVersionForPublish = project.minecraft_version
+def curseforgeProjectId = providers.gradleProperty("curseforge_project_id").getOrElse("").trim()
+def modrinthProjectId = providers.gradleProperty("modrinth_project_id").getOrElse("").trim()
+
+publishMods {
+    // The jar task's output is the reobfuscated (SRG) jar in build/libs - see the reobfJar task.
+    // Never publish build/devlibs, mods built against it crash at runtime.
+    file = tasks.named('jar').flatMap { it.archiveFile }
+    displayName = "${mod_name} ${mod_version}"
+    version = mod_version
+    changelog = providers.environmentVariable("CHANGELOG").getOrElse("See the project page for the changelog.")
+    type = ReleaseType.STABLE
+    modLoaders.add("forge")
+
+    if (curseforgeProjectId) {
+        curseforge {
+            projectId = curseforgeProjectId
+            accessToken = providers.environmentVariable("CURSEFORGE_TOKEN")
+            minecraftVersions.add(mcVersionForPublish)
+        }
+    }
+
+    if (modrinthProjectId) {
+        modrinth {
+            projectId = modrinthProjectId
+            accessToken = providers.environmentVariable("MODRINTH_TOKEN")
+            minecraftVersions.add(mcVersionForPublish)
+        }
+    }
+}
 
 // Example configuration to allow publishing using the maven-publish plugin
 publishing {
