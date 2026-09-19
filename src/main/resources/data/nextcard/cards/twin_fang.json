@@ -3,7 +3,8 @@
   "card_class": "B",
   "tags": [
     "nextcard:attack",
-    "nextcard:poison"
+    "nextcard:poison",
+    "nextcard:counter"
   ],
   "effects": [],
   "name": "card.nextcard.twin_fang",

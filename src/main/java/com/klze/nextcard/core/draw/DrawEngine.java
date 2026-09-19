@@ -36,14 +36,22 @@ public final class DrawEngine {
                                   Map<Integer, Integer> tierWeights, Set<ResourceLocation> owned,
                                   Random random) {
         List<String> log = new ArrayList<>();
-        Set<ResourceLocation> systemsOwned = index.systemsOf(owned);
 
+        // 个人可抽池 = 全卡 − 已拥有 − requires 未满足（v1.1：requires 是标签谓词，
+        // 拥有 ≥1 张带该标签的卡即满足——判断标签与普通标签同一谓词，无特例）。
+        Set<ResourceLocation> ownedTagSet = new HashSet<>();
+        for (ResourceLocation id : owned) {
+            CardDefinition card = index.byId().get(id);
+            if (card != null) {
+                ownedTagSet.addAll(card.tags());
+            }
+        }
         TreeSet<ResourceLocation> candidates = new TreeSet<>();
         for (CardDefinition card : index.byId().values()) {
             if (owned.contains(card.id())) {
                 continue;
             }
-            if (!systemsOwned.containsAll(card.requires())) {
+            if (!ownedTagSet.containsAll(card.requires())) {
                 continue;
             }
             candidates.add(card.id());
@@ -70,7 +78,6 @@ public final class DrawEngine {
         List<ResourceLocation> offers = new ArrayList<>();
         Set<ResourceLocation> offered = new HashSet<>();
         TagWeights weights = TagWeights.of(index, owned);
-
         int slotIndex = 0;
         for (DrawProfile.Slot slot : profile.slots()) {
             TreeSet<ResourceLocation> space = new TreeSet<>(candidates);
@@ -193,36 +200,5 @@ public final class DrawEngine {
             roll -= w;
         }
         return items.get(items.size() - 1);
-    }
-
-    /** 已拥有卡的标签权重表（W_t = 带标签 t 的拥有卡张数；多标签卡对每个标签各计 1）。 */
-    private record TagWeights(Map<ResourceLocation, Integer> byTag, int total) {
-
-        static TagWeights of(CardIndex index, Set<ResourceLocation> owned) {
-            Map<ResourceLocation, Integer> byTag = new HashMap<>();
-            int total = 0;
-            for (ResourceLocation id : owned) {
-                CardDefinition card = index.byId().get(id);
-                if (card == null) {
-                    continue; // 孤儿卡（数据包删卡后）：不产生标签权重（Q22 默认：失效卡灰显）。
-                }
-                for (ResourceLocation tag : card.tags()) {
-                    byTag.merge(tag, 1, Integer::sum);
-                    total++;
-                }
-            }
-            return new TagWeights(byTag, total);
-        }
-
-        int weightOf(ResourceLocation tag) {
-            return byTag.getOrDefault(tag, 0);
-        }
-
-        /** 确定性顺序（按 toString 排序，无 JVM 盐）。 */
-        List<ResourceLocation> tagOrder() {
-            List<ResourceLocation> tags = new ArrayList<>(byTag.keySet());
-            tags.sort(java.util.Comparator.comparing(ResourceLocation::toString));
-            return tags;
-        }
     }
 }

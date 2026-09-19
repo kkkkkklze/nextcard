@@ -14,11 +14,13 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * 卡片定义（v1.0 §4.1-1）。纯数据：等级唯一、标签集合、A/B/C 类、所属体系、前置体系、效果子句表。
+ * 卡片定义（v1.1 §4.1-1）。纯数据：等级唯一、标签集合、A/B/C 类、所属体系、前置标签、效果子句表。
  *
  * <p>校验规则（全部 fail-fast，加载期硬错误）：等级 1–5；标签必须已注册；A ⇒ tier≥3 且必须声明体系
  * （「A 类与三级卡同时入场」，第一批裁定 2）；C ⇒ tier≥5（C1 裁定）；非 A 卡不得声明体系。
- * 没有 stack 字段——每卡唯一拥有（第一批裁定 3：不能有同名卡）。</p>
+ * {@code requires} 是<b>标签谓词</b>（v1.1 第五批裁定）：拥有 ≥1 张带该标签的卡即满足，
+ * 判断标签与普通标签同一谓词——跨卡校验（引用的标签已注册、每卡至少一个非判断标签）在
+ * {@link CardIndex#build}。没有 stack 字段——每卡唯一拥有（第一批裁定 3：不能有同名卡）。</p>
  */
 public record CardDefinition(ResourceLocation id, int tier, CardClass cardClass,
                              Set<ResourceLocation> tags, Optional<ResourceLocation> system,

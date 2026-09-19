@@ -7,6 +7,7 @@ import com.klze.nextcard.core.draw.DrawEngine;
 import com.klze.nextcard.core.draw.DrawProfile;
 import com.klze.nextcard.core.draw.DrawResult;
 import com.klze.nextcard.core.draw.DrawSchedule;
+import com.klze.nextcard.core.draw.TagWeights;
 import com.klze.nextcard.core.draw.WeightModel;
 import com.klze.nextcard.core.effect.EffectSnapshot;
 import com.klze.nextcard.core.effect.Reconciler;
@@ -128,14 +129,14 @@ public class NextCardLogicTest {
                 "A filter exhausted -> fallback logged");
     }
 
-    /** 已拥有卡踢出候选；requires 未满足的卡不进候选；体系开启后进候选。 */
+    /** 已拥有卡踢出候选；requires 标签谓词未满足的卡不进候选；满足后进候选（v1.1 语义）。 */
     @Test
     public void ownedCardsLeavePoolAndRequiresGate() {
         Scenario scenario = Scenario.load();
         DrawProfile standardEarly = scenario.profiles().get(Scenario.PROFILE_STANDARD_EARLY);
         DrawSchedule.Row row = scenario.schedule().forDraw(3).orElseThrow();
 
-        // 没拥有 venom_edge（poison 体系未开启）→ venom_cascade（requires poison）永不出现。
+        // 没有任何带 poison 标签的卡 → venom_cascade（requires nextcard:poison）永不出现。
         for (int seed = 0; seed < 500; seed++) {
             DrawResult result = DrawEngine.draw(scenario.cards(), scenario.pools(), standardEarly,
                     row.tierWeights(), Set.of(), new Random(seed));
@@ -143,7 +144,7 @@ public class NextCardLogicTest {
                     "requires not satisfied -> never offered");
         }
 
-        // 拥有 venom_edge → 体系开启 → venom_cascade 可出现在候选（用带 T5 权重的抽次）。
+        // 拥有任一 poison 标签卡（venom_edge）→ venom_cascade 可出现在候选（带 T5 权重的抽次）。
         DrawProfile standard = scenario.profiles().get(Scenario.PROFILE_STANDARD);
         DrawSchedule.Row lateRow = scenario.schedule().forDraw(10).orElseThrow();
         boolean seen = false;
@@ -153,7 +154,61 @@ public class NextCardLogicTest {
             assertFalse(result.offers().contains(Scenario.VENOM_EDGE), "owned card must not be offered");
             seen = result.offers().contains(Scenario.VENOM_CASCADE);
         }
-        assertTrue(seen, "with the poison system owned, the mutation card becomes drawable");
+        assertTrue(seen, "with a poison-tagged card owned, the mutation card becomes drawable");
+    }
+
+    /** 判断标签（v1.1 §5.5）：不建池、不进权重；满足 requires 谓词即放行通用 C 卡。 */
+    @Test
+    public void judgmentTagGatesButNeverWeights() {
+        Scenario scenario = Scenario.load();
+        DrawProfile standard = scenario.profiles().get(Scenario.PROFILE_STANDARD);
+        DrawSchedule.Row lateRow = scenario.schedule().forDraw(10).orElseThrow();
+
+        // 不建池：counter 是判断标签，(等级，标签) 投影里没有它。
+        assertTrue(scenario.pools().cardsIn(3, Scenario.TAG_COUNTER).isEmpty(),
+                "judgment tag must not project into pools");
+
+        // 不进权重：venom_edge 有 3 个标签，但 counter 是判断标签 → 权重只数 poison+attack = 2。
+        TagWeights withMarker = TagWeights.of(scenario.cards(), Set.of(Scenario.VENOM_EDGE));
+        assertEquals(2, withMarker.total(), "judgment tag must not add weight");
+        assertTrue(withMarker.weightOf(Scenario.TAG_COUNTER) == 0, "marker tag has no weight entry");
+
+        // 判断：拥有任一带 counter 标签的卡（venom_edge 或 B 卡 twin_fang）→ chain_reaction 可抽。
+        for (ResourceLocation carrier : List.of(Scenario.VENOM_EDGE, rl("twin_fang"))) {
+            boolean seen = false;
+            for (int seed = 0; seed < 2000 && !seen; seed++) {
+                DrawResult result = DrawEngine.draw(scenario.cards(), scenario.pools(), standard,
+                        lateRow.tierWeights(), Set.of(carrier), new Random(seed));
+                seen = result.offers().contains(Scenario.CHAIN_REACTION);
+            }
+            assertTrue(seen, "generic C card must be drawable once a counter-tagged card is owned: " + carrier);
+        }
+
+        // 没有计数家族卡 → chain_reaction 永不出现。
+        for (int seed = 0; seed < 500; seed++) {
+            DrawResult result = DrawEngine.draw(scenario.cards(), scenario.pools(), standard,
+                    lateRow.tierWeights(), Set.of(rl("starter_4")), new Random(seed));
+            assertFalse(result.offers().contains(Scenario.CHAIN_REACTION));
+        }
+    }
+
+    /** 加载校验：requires 必须引用已注册标签；每卡至少一个非判断标签。 */
+    @Test
+    public void contentValidationRejectsBadRequiresAndMarkerOnlyCards() {
+        TagIndex tags = Scenario.load().tags();
+        var badRef = new CardDefinition(rl("bad_ref"), 5, CardClass.C, Set.of(Scenario.TAG_POISON),
+                Optional.empty(), List.of(rl("no_such_tag")), List.of());
+        var markerOnly = new CardDefinition(rl("marker_only"), 5, CardClass.C, Set.of(Scenario.TAG_COUNTER),
+                Optional.empty(), List.of(), List.of());
+        var ok = new CardDefinition(rl("ok"), 5, CardClass.C, Set.of(Scenario.TAG_POISON),
+                Optional.empty(), List.of(Scenario.TAG_POISON), List.of());
+
+        var result = CardIndex.build(List.of(badRef, markerOnly, ok), tags);
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("must reference a registered tag")),
+                "unresolvable requires must fail: " + result.errors());
+        assertTrue(result.errors().stream().anyMatch(e -> e.contains("non-judgment tag")),
+                "marker-only card must fail: " + result.errors());
+        assertFalse(result.errors().stream().anyMatch(e -> e.contains("nextcard:ok")), "valid card must pass");
     }
 
     /** 首抽：固定五张 starter 全部作为候选返回（5 选 1 由消费方执行）。 */

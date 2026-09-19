@@ -2,7 +2,7 @@
 
 | 项 | 值 |
 |---|---|
-| 版本 | **v1.0（冻结）**——四轮裁定全部落定；C1 = 质变卡 T5 起，C2/C3 确认，2026-09-20 开工确认，M0 进行中 |
+| 版本 | **v1.1**——v1.0 冻结后追加第五批裁定：**判断标签与通用 C 卡**（§5.5），已落地（logicTest 15/15） |
 | 日期 | 2026-09-20 |
 | 基础工程 | forge-1.20.1-mod-3（本工程，MC 1.20.1 / Forge 47.4.23 / MDG Legacy 工程化模板，当前占位 id `examplemod`） |
 | 作者 | klze |
@@ -18,7 +18,8 @@
   2. **体系（system）**：由方向卡声明的命名空间（基础行为 + 计数器），质变卡在体系挂点上做规则修饰——与修仙 mod「行为修饰通道」（槽位表 + 单点读取）同型；
   3. **整合包适配**：移除物品无内置获取途径，由整合包任务发放；mod 不内置经济，内容入口全部对整合包友好。
 - 三条铁律已转成**六个核心抽象 + 特例消灭表 + 四个能失败的门**（§4）。抽卡引擎对卡类零特判——类只是候选过滤器字段；质变语义住在效果层，不进引擎。
-- **微项已全部定案**（§8.3）：C1 质变卡 **T5 起**入场、C2 `requires` 语义确认（前置体系未拥有 ⇒ 不进个人可抽池）、C3 挂点词表随首板卡表冻结。2026-09-20 开工确认，M0 进行中。
+- **微项已全部定案**（§8.3）：C1 质变卡 **T5 起**入场、C2 `requires` 语义确认、C3 挂点词表随首板卡表冻结。M0 已完成（`ae61ad2`）。
+- **第五批裁定（v1.1）：判断标签与通用 C 卡**——标签可声明 `judgment_only`：不参与概率（不进权重、不建池）、只做 `requires` 判断；`requires` 统一改为**标签谓词**（拥有 ≥1 张带该标签的卡即满足）。一张通用 C 卡服务所有「类似机制」的体系，不必逐体系写卡（§5.5）。
 
 ---
 
@@ -109,9 +110,9 @@ nextcard/
 
 ### §4.1 六个核心抽象
 
-1. **CardDefinition**——纯数据：`{ tier(单值 1–5), tags(集合), cardClass(A/B/C), system?(A 卡声明所属体系), requires?(前置体系 id 列表), effects(子句表) }`。加载校验（硬错误，fail-fast）：等级唯一、标签已注册、`cardClass=A ⇒ tier≥3`、`cardClass=C ⇒ tier≥5`（C1 已裁定）、A 卡必须声明体系、`requires` 引用的体系必须存在、profile 引用的卡 id 必须可解析。**没有 stack 字段——每卡唯一拥有**。
-2. **TagDefinition**——标签是一等公民：id/显示名/颜色/图标/描述，数据包注册。
-3. **PoolIndex + 个人可抽池**——派生物：CardIndex 投影出 (tier, tag) → 卡集合，空池剔除，reload 重建，无注册口。玩家候选集 = 全卡 − 已拥有 − 前置体系未拥有（`requires`，默认语义 C2）。全是纯函数过滤，无每玩家结构。
+1. **CardDefinition**——纯数据：`{ tier(单值 1–5), tags(集合), cardClass(A/B/C), system?(A 卡声明所属体系), requires?(前置体系 id 列表), effects(子句表) }`。加载校验（硬错误，fail-fast）：等级唯一、标签已注册、`cardClass=A ⇒ tier≥3`、`cardClass=C ⇒ tier≥5`（C1 已裁定）、A 卡必须声明体系、`requires` 引用的标签必须已注册、每卡至少一个非判断标签（否则无池可容、永远无法被抽到）、profile 引用的卡 id 必须可解析。**没有 stack 字段——每卡唯一拥有**。
+2. **TagDefinition**——标签是一等公民：id/显示名/颜色/图标/描述/`judgment_only`（判断标签，v1.1），数据包注册。
+3. **PoolIndex + 个人可抽池**——派生物：CardIndex 投影出 (tier, tag) → 卡集合，空池剔除，reload 重建，无注册口。玩家候选集 = 全卡 − 已拥有 − requires 标签谓词未满足（拥有 ≥1 张带该标签的卡即满足，v1.1 §5.5）。全是纯函数过滤，无每玩家结构。判断标签不投影池。
 4. **DrawEngine（纯函数）**——输入 `(CardIndex 快照, DrawProfile, 已拥有卡集, RNG)`，输出 `(5 张候选, 决策日志)`。不碰方块、玩家、NBT、网络。**引擎对卡类零特判**：A/B/C 只是候选过滤器字段；首槽过滤 = `filter: {cardClass: A}`。
 5. **DrawProfile / DrawSchedule（数据）**——首抽与标准抽都是 profile：
 
@@ -147,7 +148,7 @@ nextcard/
 | 首槽必 A（自 A 入场起） | profile.slots[0].filter + schedule 分段 | 采样器统一过滤步骤 |
 | 等级进度 / T5 第 9 抽 / T1 淡出 / 15 上限 | `draw_schedule.json` | schedule 查表 |
 | 标签份额渐近 80% | WeightModel 参数（cap、W0） | 一个公式 |
-| 选定卡踢出卡池 / 前置不满足 | 引擎输入 = 全卡 − 已拥有 − requires 未满足 | 纯函数过滤 |
+| 选定卡踢出卡池 / requires 未满足 | 引擎输入 = 全卡 − 已拥有 − requires 未满足（v1.1：requires = 标签谓词，判断标签不进概率） | 同一个纯函数谓词，判断标签与普通标签无分叉 |
 | 空池 / 个人池抽干 / 全部无卡 | 空池剔除 + 权重在非空池归一；全空 →「卡池无卡」 | 归一化一处 |
 | C 类质变 | `mechanic_modifier` 子句 → 修饰槽位（§5.4） | 槽位表 + 挂点单点读取 |
 | 移除退次数 / 生存一次性 | `manifest.json` remove_policy | 物品读数据 |
@@ -217,7 +218,7 @@ nextcard/
 
 ```
 第 1 阶段  定等级   schedule 查表 → §5.1 权重行；该行内无候选的等级剔除，权重在剩余等级归一
-第 2 阶段  定池子   该等级内候选 = 该池未拥有且 requires 满足的卡；空池剔除；
+第 2 阶段  定池子   该等级内候选 = 该池未拥有且 requires 满足的卡；空池剔除；判断标签不进 W（v1.1）；
                       W_t = 拥有卡中带标签 t 的张数（每卡计 1，多标签卡对每个标签各计 1）
                       标签总份额 S = cap × ΣW / (ΣW + W0)，cap = 0.8，W0 = 8
                       未满部分（1 − S）→ 纯随机支；标签之间按 W_t / ΣW 分配 S
@@ -246,6 +247,20 @@ nextcard/
 
   含义：连击体系的「攻击计数输入」挂点上，每次攻击按中毒体系的层数计次——即第三批裁定 3 的例子。`target.hook` 是开放词表；`source` 可跨体系引用（常量也行：`{"const": 3}`）。
 - **落点形状 = 修仙 mod D-040 行为修饰通道**：槽位表 + 每槽一个读取点；加新机制 = 一个挂点或一条 JSON，不改数值代码。
+- **通用 C 卡的效果侧草案（随首板卡表冻结，C3）**：判断标签解决了「入场」，效果侧的泛化形态是 source 通配——`{ "source": { "tag": "nextcard:counter", "counter": "stacks" } }` = 拥有卡中所有带 counter 标签的体系各自的 stacks 计数器逐体系生效。未定项：多体系并存时逐体系独立（推荐，修饰槽位天然支持）还是取最大。
+
+### §5.5 判断标签与通用 C 卡（v1.1，第五批裁定）
+
+**裁定原文**：C 类可以拓展通用——将类似机制的卡打上「不参与概率、只参与判断」的标签，C 类卡满足判断就加入卡池，极大减少为每个体系设置类似 C 卡的工作量。
+
+**落地形态**：
+
+1. **判断标签**：`card_tags/*.json` 里 `"judgment_only": true`。不进标签权重 W_t、不投影 (等级，标签) 池；唯一用途 = `requires` 谓词。
+2. **requires 统一为标签谓词**：`"requires": [标签 id]`，满足 = 拥有 ≥1 张带该标签的卡。判断标签与普通标签走**同一个谓词**（用普通标签做条件也合法，如「拥有任一火系卡」）——无特例。v1.0 的「requires 指向体系」语义被本机制取代：体系入场判断改由「A 卡（或该体系家族卡）携带的判断标签」表达。
+3. **通用 C 卡示例**：判断标签 `nextcard:counter`（计数体系家族）打在 venom_edge（毒 A 卡）与 twin_fang 上；通用 C 卡 `chain_reaction`（每次攻击算作计数层数次攻击）`requires: [nextcard:counter]`——玩家拥有任一计数家族卡即入池，**毒/燃/流血等每个新计数体系都不需要再写对应 C 卡**，只给 A 卡打上 `nextcard:counter` 即可。
+4. **效果侧的泛化**（source 通配）见 §5.4 末条，随首板卡表冻结（C3）。
+5. **孤儿卡**（数据包删卡后）不携带标签信息 → 不满足任何判断（与 Q22 失效卡语义一致）。
+6. **加载校验**：requires 必须引用已注册标签；每卡至少一个非判断标签（否则无池可容、永远无法被抽到）。
 
 ---
 
@@ -292,6 +307,23 @@ nextcard/
 
 标签（`data/nextcard/card_tags/fire.json`）：`{ "name": "tag.nextcard.fire", "color": "E25822", "icon": "fire", "description": "…" }`
 
+判断标签（`data/nextcard/card_tags/counter.json`，v1.1 §5.5）：
+
+```json
+{ "name": "tag.nextcard.counter", "color": "8BC34A", "icon": "counter",
+  "description": "…", "judgment_only": true }
+```
+
+通用 C 卡（`data/nextcard/cards/chain_reaction.json`，判断满足即入池）：
+
+```json
+{
+  "tier": 5, "card_class": "C", "requires": ["nextcard:counter"],
+  "tags": ["nextcard:poison", "nextcard:attack"], "effects": [],
+  "name": "card.nextcard.chain_reaction", "texture": "chain_reaction"
+}
+```
+
 全局策略（`data/nextcard/manifest.json`）：`{ "remove_item": { "refund_draws": 1, "consume_survival": true } }`
 
 profile / schedule 见 §4.1-5、§5.1。原则：**字段全部可校验，未知字段报错**；字段手册（编写指南）随 M3 交付。
@@ -314,6 +346,7 @@ profile / schedule 见 §4.1-5、§5.1。原则：**字段全部可校验，未�
 - **DFU `optionalFieldOf` 陷阱现场重演**：`tier_weights` 用 `Codec.INT` 做 map 键在 JsonOps 上解析失败，被 `optionalFieldOf` 静默吞成空表——与踩坑记录（DFU optionalFieldOf swallows errors）完全一致；修复 = 键经字符串 flatXmap 解码（`DrawSchedule.TIER_WEIGHTS_CODEC`）。
 - **G2 连注释一起查**：`ContentReader` javadoc 里的示例卡 id 被门抓出——引擎包零内容字面量，注释也算。
 - 工作区 `test` 任务按模板约定跳过（中文路径），纯逻辑验证走 `logicTest`（JavaExec），`check` 已挂接，`build` 自动执行。
+- **v1.1 追加（第五批裁定落地）**：`TagDefinition.judgmentOnly` + `PoolIndex`/`TagWeights` 排除判断标签 + `requires` 标签谓词化 + 加载校验（坏引用 / 纯判断标签卡拒绝）；示例内容 +`counter` 判断标签 + 通用 C 卡 `chain_reaction`（17 卡）；logicTest **15/15** 绿（新增 `judgmentTagGatesButNeverWeights`、`contentValidationRejectsBadRequiresAndMarkerOnlyCards`）。
 
 ---
 
@@ -340,6 +373,13 @@ profile / schedule 见 §4.1-5、§5.1。原则：**字段全部可校验，未�
 | 11 | Q15 效果原语 | 可以（四原语），不够再改 | §4.4（开放词表） |
 | 12 | Q23 内容量 | 首板卡表由你在框架完成后提供 | §4.5、§7-M3 |
 | 13 | Q24 美术/语言 | 可以（模板化美术 + 简中） | §7-M3/M4 |
+
+### §8.1.1 第五批裁定（2026-09-20，v1.1）
+
+| # | 裁定 | 落点 |
+|---|---|---|
+| 1 | **判断标签**：标签可声明 `judgment_only`——不参与概率（不进权重、不建池），只做 requires 判断；C 类卡满足判断即入池，一张通用 C 卡服务所有类似机制体系 | §5.5、§4.1-2/3、§6 |
+| — | 随本裁定，`requires` 从「体系引用」统一改为「标签谓词」（拥有 ≥1 张带该标签的卡即满足），判断标签与普通标签同一谓词，全类可用无分叉 | §4.1-1、§5.3 |
 
 ### §8.2 按推荐默认执行、未否决即生效
 

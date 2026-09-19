@@ -27,6 +27,9 @@ public record PoolIndex(Map<Integer, Map<ResourceLocation, List<ResourceLocation
         Map<Integer, Map<ResourceLocation, Set<ResourceLocation>>> acc = new TreeMap<>();
         for (CardDefinition card : index.byId().values()) {
             for (ResourceLocation tag : card.tags()) {
+                if (index.markerTags().contains(tag)) {
+                    continue; // 判断标签不参与概率：不投影出池（v1.1 §5.5，第五批裁定）
+                }
                 acc.computeIfAbsent(card.tier(), k -> new TreeMap<>())
                         .computeIfAbsent(tag, k -> new TreeSet<>())
                         .add(card.id());

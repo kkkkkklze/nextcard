@@ -1,0 +1,7 @@
+{
+  "name": "tag.nextcard.counter",
+  "color": "8BC34A",
+  "icon": "counter",
+  "description": "tag.nextcard.counter.desc",
+  "judgment_only": true
+}

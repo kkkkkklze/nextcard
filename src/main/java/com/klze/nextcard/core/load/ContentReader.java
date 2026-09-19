@@ -31,7 +31,7 @@ public final class ContentReader {
     public static final Set<String> CARD_KEYS = Set.of(
             "tier", "card_class", "tags", "system", "requires", "effects", "name", "texture");
     /** 标签 JSON 允许的键。 */
-    public static final Set<String> TAG_KEYS = Set.of("name", "color", "icon", "description");
+    public static final Set<String> TAG_KEYS = Set.of("name", "color", "icon", "description", "judgment_only");
 
     private ContentReader() {
     }

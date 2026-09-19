@@ -4,6 +4,7 @@ import com.klze.nextcard.core.load.LoadResult;
 import com.klze.nextcard.core.tag.TagIndex;
 import net.minecraft.resources.ResourceLocation;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -12,18 +13,23 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * 卡片注册表（只读）。跨卡校验在这里：duplicate id、{@code requires} 引用的体系必须由某张 A 卡声明。
+ * 卡片注册表（只读）。跨卡校验在这里：duplicate id、{@code requires} 引用的标签必须已注册
+ * （v1.1：requires 是标签谓词——拥有 ≥1 张带该标签的卡即满足，不再指向体系）、
+ * 每张卡至少有一个非判断标签（否则没有任何池能投影出它，永远无法被抽到）。
  */
-public record CardIndex(Map<ResourceLocation, CardDefinition> byId) {
+public record CardIndex(Map<ResourceLocation, CardDefinition> byId,
+                        Set<ResourceLocation> registeredTags,
+                        Set<ResourceLocation> markerTags) {
 
-    public static final CardIndex EMPTY = new CardIndex(Map.of());
+    public static final CardIndex EMPTY =
+            new CardIndex(Map.of(), Set.of(), Set.of());
 
     public static CardIndex empty() {
         return EMPTY;
     }
 
     public static LoadResult<CardIndex> build(Collection<CardDefinition> cards, TagIndex tags) {
-        List<String> errors = new java.util.ArrayList<>();
+        List<String> errors = new ArrayList<>();
         Map<ResourceLocation, CardDefinition> map = new TreeMap<>();
         for (CardDefinition card : cards) {
             errors.addAll(card.validate(tags));
@@ -37,12 +43,16 @@ public record CardIndex(Map<ResourceLocation, CardDefinition> byId) {
         }
         for (CardDefinition card : map.values()) {
             for (ResourceLocation required : card.requires()) {
-                if (!systems.contains(required)) {
-                    errors.add(card.id() + ": requires unknown system " + required);
+                if (!tags.contains(required)) {
+                    errors.add(card.id() + ": requires must reference a registered tag, got " + required);
                 }
             }
+            if (card.tags().stream().allMatch(tags::isMarker)) {
+                errors.add(card.id() + ": every card needs at least one non-judgment tag (otherwise no pool can hold it)");
+            }
         }
-        return new LoadResult<>(new CardIndex(Map.copyOf(map)), errors);
+        return new LoadResult<>(new CardIndex(Map.copyOf(map), Set.copyOf(tags.ids()), Set.copyOf(tags.markerIds())),
+                errors);
     }
 
     /** 已拥有卡集开启的体系集合（体系存在 ⇔ 定义它的 A 卡被拥有——§5.4，无体系注册表）。 */
@@ -55,10 +65,5 @@ public record CardIndex(Map<ResourceLocation, CardDefinition> byId) {
             }
         }
         return systems;
-    }
-
-    /** C2 默认语义：前置体系未拥有 ⇒ 该卡不进个人可抽池（效果因体系不存在自然无效——双保险同一机制）。 */
-    public boolean satisfiesRequires(CardDefinition card, Set<ResourceLocation> ownedIds, Set<ResourceLocation> systemsOwned) {
-        return systemsOwned.containsAll(card.requires());
     }
 }

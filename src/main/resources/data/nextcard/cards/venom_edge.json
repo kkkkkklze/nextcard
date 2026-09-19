@@ -4,7 +4,8 @@
   "system": "nextcard:poison",
   "tags": [
     "nextcard:poison",
-    "nextcard:attack"
+    "nextcard:attack",
+    "nextcard:counter"
   ],
   "effects": [],
   "name": "card.nextcard.venom_edge",

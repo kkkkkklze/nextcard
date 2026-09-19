@@ -1,0 +1,14 @@
+{
+  "tier": 5,
+  "card_class": "C",
+  "requires": [
+    "nextcard:counter"
+  ],
+  "tags": [
+    "nextcard:poison",
+    "nextcard:attack"
+  ],
+  "effects": [],
+  "name": "card.nextcard.chain_reaction",
+  "texture": "chain_reaction"
+}

@@ -26,6 +26,8 @@ public final class Scenario {
     public static final ResourceLocation TAG_ATTACK = rl("attack");
     public static final ResourceLocation TAG_FIRE = rl("fire");
     public static final ResourceLocation TAG_POISON = rl("poison");
+    /** 判断标签（judgment_only）：不参与概率，只做 requires 谓词（v1.1 §5.5）。 */
+    public static final ResourceLocation TAG_COUNTER = rl("counter");
     public static final ResourceLocation SYSTEM_POISON = rl("poison");
 
     public static final List<ResourceLocation> STARTERS = List.of(
@@ -33,6 +35,7 @@ public final class Scenario {
     public static final ResourceLocation VENOM_EDGE = rl("venom_edge");
     public static final ResourceLocation VENOM_CASCADE = rl("venom_cascade");
     public static final ResourceLocation PHOENIX_BREATH = rl("phoenix_breath");
+    public static final ResourceLocation CHAIN_REACTION = rl("chain_reaction");
 
     public static final ResourceLocation PROFILE_FIRST = rl("first");
     public static final ResourceLocation PROFILE_STANDARD_EARLY = rl("standard_early");
@@ -55,9 +58,10 @@ public final class Scenario {
 
     public static Scenario load() {
         TagIndex tags = new TagIndex(Map.of(
-                TAG_ATTACK, new TagDefinition(TAG_ATTACK, "tag.nextcard.attack", "B0BEC5", "attack", ""),
-                TAG_FIRE, new TagDefinition(TAG_FIRE, "tag.nextcard.fire", "E25822", "fire", ""),
-                TAG_POISON, new TagDefinition(TAG_POISON, "tag.nextcard.poison", "7CB342", "poison", "")));
+                TAG_ATTACK, new TagDefinition(TAG_ATTACK, "tag.nextcard.attack", "B0BEC5", "attack", "", false),
+                TAG_FIRE, new TagDefinition(TAG_FIRE, "tag.nextcard.fire", "E25822", "fire", "", false),
+                TAG_POISON, new TagDefinition(TAG_POISON, "tag.nextcard.poison", "7CB342", "poison", "", false),
+                TAG_COUNTER, new TagDefinition(TAG_COUNTER, "tag.nextcard.counter", "8BC34A", "counter", "", true)));
         List<CardDefinition> cards = List.of(
                 card(rl("starter_1"), 1, CardClass.B, TAG_ATTACK),
                 card(rl("starter_2"), 1, CardClass.B, TAG_ATTACK),
@@ -67,16 +71,18 @@ public final class Scenario {
                 card(rl("ember_lash"), 2, CardClass.B, TAG_FIRE, TAG_ATTACK),
                 card(rl("ash_guard"), 2, CardClass.B, TAG_FIRE),
                 card(rl("cinder_step"), 2, CardClass.B, TAG_FIRE, TAG_POISON),
-                new CardDefinition(VENOM_EDGE, 3, CardClass.A, Set.of(TAG_POISON, TAG_ATTACK),
+                new CardDefinition(VENOM_EDGE, 3, CardClass.A, Set.of(TAG_POISON, TAG_ATTACK, TAG_COUNTER),
                         Optional.of(SYSTEM_POISON), List.of(), List.of()),
-                card(rl("twin_fang"), 3, CardClass.B, TAG_ATTACK, TAG_POISON),
+                card(rl("twin_fang"), 3, CardClass.B, TAG_ATTACK, TAG_POISON, TAG_COUNTER),
                 card(rl("iron_root"), 3, CardClass.B, TAG_POISON),
                 card(rl("storm_pulse"), 4, CardClass.B, TAG_ATTACK),
                 card(rl("grave_bloom"), 4, CardClass.B, TAG_POISON, TAG_FIRE),
                 new CardDefinition(PHOENIX_BREATH, 5, CardClass.A, Set.of(TAG_FIRE, TAG_ATTACK),
                         Optional.of(rl("rebirth")), List.of(), List.of()),
                 new CardDefinition(VENOM_CASCADE, 5, CardClass.C, Set.of(TAG_POISON, TAG_ATTACK),
-                        Optional.empty(), List.of(SYSTEM_POISON), List.of()),
+                        Optional.empty(), List.of(TAG_POISON), List.of()),
+                new CardDefinition(CHAIN_REACTION, 5, CardClass.C, Set.of(TAG_POISON, TAG_ATTACK),
+                        Optional.empty(), List.of(TAG_COUNTER), List.of()),
                 card(rl("last_stand"), 5, CardClass.B, TAG_ATTACK));
         CardIndex index = checked(CardIndex.build(cards, tags));
         PoolIndex pools = PoolIndex.of(index);
