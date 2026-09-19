@@ -48,7 +48,7 @@ Windows 用 `gradlew.bat`。首次构建 5~15 分钟（下载 MC + 反编译重�
 ## 三、目录结构
 
 ```
-forge-1.20.1-mod-2/
+forge-1.20.1-mod-3/
 ├── AGENTS.md                     # 给 AI 协作者/新人的说明（目录约定、硬性规则、已知问题）
 ├── build.gradle                  # 工具链、镜像仓库、run 配置、mixin、datagen、测试
 ├── gradle.properties             # 模组元数据与版本号（会被注入 mods.toml）、JDK17 路径
@@ -120,7 +120,7 @@ Gradle 把测试工作进程的 classpath 写进一个 **UTF-8 的 argfile**，�
 mklink /J C:\mcdev "C:\Users\Administrator\Documents\开发\mod"
 ```
 
-然后在 `C:\mcdev\forge-1.20.1-mod-2` 里构建（CI 上路径是 ASCII，测试正常执行）。
+然后在 `C:\mcdev\forge-1.20.1-mod-3` 里构建（CI 上路径是 ASCII，测试正常执行）。
 
 ## 六、改成你自己的模组
 
