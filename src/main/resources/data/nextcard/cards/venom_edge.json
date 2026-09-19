@@ -1,0 +1,12 @@
+{
+  "tier": 3,
+  "card_class": "A",
+  "system": "nextcard:poison",
+  "tags": [
+    "nextcard:poison",
+    "nextcard:attack"
+  ],
+  "effects": [],
+  "name": "card.nextcard.venom_edge",
+  "texture": "venom_edge"
+}

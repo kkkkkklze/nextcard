@@ -1,0 +1,10 @@
+{
+  "tier": 2,
+  "card_class": "B",
+  "tags": [
+    "nextcard:fire"
+  ],
+  "effects": [],
+  "name": "card.nextcard.ash_guard",
+  "texture": "ash_guard"
+}

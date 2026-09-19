@@ -1,0 +1,6 @@
+{
+  "remove_item": {
+    "refund_draws": 1,
+    "consume_survival": true
+  }
+}

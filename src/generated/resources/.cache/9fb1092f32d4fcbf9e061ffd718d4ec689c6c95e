@@ -1,5 +1,5 @@
-// 1.20.1	2026-09-14T01:13:57.5199752	Recipes
-75675b10399bd42fcf22d58c16ffd9c4d0233053 data/examplemod/advancements/recipes/misc/example_item_from_dirt.json
-03c10ae29e2cb11e34a8c5de85464c7349c6fa25 data/examplemod/advancements/recipes/misc/example_item_from_smelting.json
-2d1fda7161454f314a7be7da34bbdcea62a77a06 data/examplemod/recipes/example_item_from_dirt.json
-a4c47aa2bf142d3115f86b4a4e1d0eefff23797e data/examplemod/recipes/example_item_from_smelting.json
+// 1.20.1	2026-09-20T02:58:54.8599079	Recipes
+3820612db9dca1da5eaa197f6dfbc973203ef5ec data/nextcard/advancements/recipes/misc/example_item_from_dirt.json
+b99a587ff3c0e27c60c92caeb07e110716d03903 data/nextcard/advancements/recipes/misc/example_item_from_smelting.json
+629704b94e3253e866f8d44c80902220caaf45ba data/nextcard/recipes/example_item_from_dirt.json
+3f2a8e5c0d8e31f2850952146be3dd74e2bcdf52 data/nextcard/recipes/example_item_from_smelting.json

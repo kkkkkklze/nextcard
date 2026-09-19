@@ -1,4 +1,9 @@
-# MinecraftForge 1.20.1 模组工程（官方 MDK + 国内镜像 + 工程化骨架）
+# nextCard（MinecraftForge 1.20.1 / 作者 klze）
+
+抽卡构筑框架型 mod（适配整合包）：从世界中的抽卡方块获得卡片，以方向（A）/方式（B）/质变（C）三类卡构筑体系。
+**规格与拍板记录见 `docs/nextCard开发文档.md`（v1.0 冻结）**；本 README 保留模板的工程说明，工程实践部分依然适用。
+
+> 本工程由 forge-1.20.1-mod-2 工程化模板派生（模板原始说明见下方各节；`六、改成你自己的模组` 已于 2026-09-20 执行完毕：mod_id=nextcard、包 com.klze.nextcard、作者 klze）。
 
 以 **NeoForged 官方维护的 Forge 1.20.1 MDK**（`NeoForgeMDKs/MDK-Forge-1.20.1-ModDevGradle`）为基底，
 配好国内镜像，并按 591 个开源 mod 仓库的生态调研补齐了工程化骨架（datagen / mixin / 网络 / 配置 /
@@ -114,7 +119,8 @@ Gradle 把测试工作进程的 classpath 写进一个 **UTF-8 的 argfile**，�
 :test skipped - project path contains non-ASCII characters (...)
 ```
 
-想让单测真正跑起来，用纯 ASCII 路径访问工程即可，例如建一个 junction：
+本项目的纯逻辑测试走 `./gradlew logicTest`（JavaExec 直接喂 classpath，中文路径下可用，`check` 已挂接）。
+想让 JUnit 平台（`:test`）也跑起来，用纯 ASCII 路径访问工程即可，例如建一个 junction：
 
 ```
 mklink /J C:\mcdev "C:\Users\Administrator\Documents\开发\mod"
@@ -122,12 +128,15 @@ mklink /J C:\mcdev "C:\Users\Administrator\Documents\开发\mod"
 
 然后在 `C:\mcdev\forge-1.20.1-mod-3` 里构建（CI 上路径是 ASCII，测试正常执行）。
 
-## 六、改成你自己的模组
+## 六、改成你自己的模组（已执行 ✓ 2026-09-20）
+
+已执行：`mod_id=nextcard`、`mod_name=NextCard`、`mod_authors=klze`、`mod_group_id=com.klze.nextcard`、
+包 `com.klze.nextcard`、`nextcard.mixins.json`；`mod_version=0.1.0`；LICENSE 维持 All Rights Reserved。
+以下步骤留给历史参考：
 
 1. `gradle.properties`：改 `mod_id`、`mod_name`、`mod_group_id`、`mod_version`、`mod_authors`、`mod_description`。
-2. 重命名包 `src/main/java/com/example/examplemod/`，同步改主类 `MODID` 常量（必须与 `mod_id` 一致）。
-3. `src/main/resources/examplemod.mixins.json` 改成 `<新mod_id>.mixins.json`（`build.gradle` 里用的是 `${mod_id}`，会自动跟随）；
-   `build.gradle` 的 `mixin { config ... }` 同理。
+2. 重命名包，同步改主类 `MODID` 常量（必须与 `mod_id` 一致）。
+3. `<mod_id>.mixins.json` 改名（`build.gradle` 里用的是 `${mod_id}`，会自动跟随）。
 4. `datagen` 里所有 `modLoc(...)`、语言键、标签会自动跟随 `mod_id`，示例内容按需删除。
 5. `LICENSE` 与 `gradle.properties` 的 `mod_license` 改成你选的许可协议。
 

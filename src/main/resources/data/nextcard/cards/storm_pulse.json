@@ -1,0 +1,10 @@
+{
+  "tier": 4,
+  "card_class": "B",
+  "tags": [
+    "nextcard:attack"
+  ],
+  "effects": [],
+  "name": "card.nextcard.storm_pulse",
+  "texture": "storm_pulse"
+}

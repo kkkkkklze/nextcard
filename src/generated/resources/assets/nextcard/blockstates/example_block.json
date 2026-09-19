@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "nextcard:block/example_block"
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "tier": 2,
+  "card_class": "B",
+  "tags": [
+    "nextcard:fire",
+    "nextcard:poison"
+  ],
+  "effects": [],
+  "name": "card.nextcard.cinder_step",
+  "texture": "cinder_step"
+}

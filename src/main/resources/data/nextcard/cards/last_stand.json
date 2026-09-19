@@ -1,0 +1,10 @@
+{
+  "tier": 5,
+  "card_class": "B",
+  "tags": [
+    "nextcard:attack"
+  ],
+  "effects": [],
+  "name": "card.nextcard.last_stand",
+  "texture": "last_stand"
+}

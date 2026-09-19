@@ -211,6 +211,37 @@ dependencies {
     jarJar libs.mixinextras.forge
 }
 
+// --- Pure-logic tests (src/test/java, driven by the `logicTest` task below) ----------------
+// Same environment limitation as the `test` skip below: the project path contains non-ASCII
+// characters and Gradle's Test worker cannot load any test class. JavaExec hands `java -cp`
+// the classpath directly, which survives - the pattern proven in forge-1.20.1-mod (spirepowers).
+// JUnit still provides the annotations, assertions and failure messages; only the runner is local
+// (NextCardLogicTestRunner, explicit suite list, non-zero exit on failure).
+//
+// The merged Minecraft+Forge jar supplies the plain data types the engine uses (ResourceLocation,
+// DFU codecs) without booting the game; client-extra holds no classes, it only satisfies asset
+// lookups should a test ever touch one.
+def mergedMinecraft = fileTree('build/moddev/artifacts') { include 'forge-*-merged.jar' }
+def clientAssets = fileTree('build/moddev/artifacts') { include 'client-extra-*.jar' }
+sourceSets.test.compileClasspath += mergedMinecraft + clientAssets + configurations.compileClasspath
+sourceSets.test.runtimeClasspath += mergedMinecraft + clientAssets + configurations.compileClasspath
+
+tasks.register('logicTest', JavaExec) {
+    group = 'verification'
+    description = 'Runs the pure-logic suite (G1 content-deletion / G2 no-content-literals / G3 probability gates).'
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.klze.nextcard.logic.NextCardLogicTestRunner'
+    jvmArgs '-Dfile.encoding=UTF-8',
+            "-Dnextcard.content.dir=${file('src/main/resources/data/nextcard')}",
+            "-Dnextcard.core.src=${file('src/main/java/com/klze/nextcard/core')}"
+    standardOutput = System.out
+}
+
+tasks.named('check').configure {
+    dependsOn 'logicTest'
+}
+
 // Known environment limitation (Windows + non-ASCII project path): gradle hands the test worker its
 // classpath through a UTF-8 argument file, but the JVM launcher decodes that file with the system
 // ANSI charset. With a path like ...\Documents\开发\mod\... the classpath entries are corrupted and

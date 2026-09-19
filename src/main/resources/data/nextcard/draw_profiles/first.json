@@ -1,0 +1,10 @@
+{
+  "cards": [
+    "nextcard:starter_1",
+    "nextcard:starter_2",
+    "nextcard:starter_3",
+    "nextcard:starter_4",
+    "nextcard:starter_5"
+  ],
+  "grant": "pick_one"
+}

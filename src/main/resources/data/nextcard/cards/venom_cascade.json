@@ -1,0 +1,14 @@
+{
+  "tier": 5,
+  "card_class": "C",
+  "requires": [
+    "nextcard:poison"
+  ],
+  "tags": [
+    "nextcard:poison",
+    "nextcard:attack"
+  ],
+  "effects": [],
+  "name": "card.nextcard.venom_cascade",
+  "texture": "venom_cascade"
+}

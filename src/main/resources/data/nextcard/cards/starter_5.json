@@ -1,0 +1,11 @@
+{
+  "tier": 1,
+  "card_class": "B",
+  "tags": [
+    "nextcard:attack",
+    "nextcard:poison"
+  ],
+  "effects": [],
+  "name": "card.nextcard.starter_5",
+  "texture": "starter"
+}

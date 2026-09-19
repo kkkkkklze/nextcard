@@ -1,0 +1,12 @@
+{
+  "tier": 5,
+  "card_class": "A",
+  "tags": [
+    "nextcard:fire",
+    "nextcard:attack"
+  ],
+  "effects": [],
+  "name": "card.nextcard.phoenix_breath",
+  "texture": "phoenix_breath",
+  "system": "nextcard:rebirth"
+}

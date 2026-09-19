@@ -1,0 +1,11 @@
+{
+  "tier": 4,
+  "card_class": "B",
+  "tags": [
+    "nextcard:poison",
+    "nextcard:fire"
+  ],
+  "effects": [],
+  "name": "card.nextcard.grave_bloom",
+  "texture": "grave_bloom"
+}

@@ -1,0 +1,10 @@
+{
+  "tier": 3,
+  "card_class": "B",
+  "tags": [
+    "nextcard:poison"
+  ],
+  "effects": [],
+  "name": "card.nextcard.iron_root",
+  "texture": "iron_root"
+}

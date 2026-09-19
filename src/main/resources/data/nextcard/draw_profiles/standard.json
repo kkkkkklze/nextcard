@@ -1,0 +1,23 @@
+{
+  "slots": [
+    {
+      "filter": {
+        "cardClass": "A"
+      },
+      "sampling": "tag_weighted"
+    },
+    {
+      "sampling": "tag_weighted"
+    },
+    {
+      "sampling": "tag_weighted"
+    },
+    {
+      "sampling": "tag_weighted"
+    },
+    {
+      "sampling": "tag_weighted"
+    }
+  ],
+  "grant": "pick_one"
+}
