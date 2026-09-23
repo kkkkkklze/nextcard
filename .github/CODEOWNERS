@@ -1,0 +1,25 @@
+# CODEOWNERS —— 谁该被拉来 review
+# 语法：每行 = 一个模式 + 若干 owner（@GitHub 用户名）。后面的规则覆盖前面的。
+# 生效前提：被列出的账号先是本仓库协作者，且分支开了 protection + "Require review from Code Owners"；
+# 否则这里只是声明，GitHub 不会通知也拦不住合并。
+
+# 团队四人组兜底（klze 是版权人/发起人）
+*                  @kkkkkklze @inrralves @cxxx-0v0 @frostx3346-dot
+
+# 规格与拍板记录：改动即改契约，必须 klze 过目
+/docs/             @kkkkkklze
+/AGENTS.md         @kkkkkklze
+/README.md         @kkkkkklze
+/LICENSE           @kkkkkklze
+
+# core/ 引擎层：三条铁律（内容不约束架构 / 不许特例 / 极致压缩）与 G1-G4 门住在这里
+/src/main/java/com/klze/nextcard/core/   @kkkkkklze @inrralves
+
+# 数值与内容表（示例卡、日程、标签）：动这里会改变玩家可见数值
+/src/main/resources/data/nextcard/       @kkkkkklze @cxxx-0v0 @frostx3346-dot
+
+# 构建与工程化：版本目录、镜像、CI、混淆配置
+/build.gradle      @kkkkkklze
+/gradle/           @kkkkkklze
+/gradle.properties @kkkkkklze
+/.github/          @kkkkkklze
