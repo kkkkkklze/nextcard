@@ -38,8 +38,8 @@
 ## 目录约定
 
 ```
-src/main/java/com/example/examplemod/
-├── ExampleMod.java          # 唯一入口：只做注册/配置/网络/端分派的编排，业务代码不要写这里
+src/main/java/com/klze/nextcard/
+├── NextCard.java            # 唯一入口：只做注册/配置/网络/端分派的编排，业务代码不要写这里
 ├── core/                    # 引擎（零内容知识、纯逻辑、可无头测试；G2 门禁止出现内容字面量）
 │   ├── card/ tag/ pool/ draw/ effect/ load/
 ├── sim/                     # 蒙特卡洛与参考场景（允许引用示例内容，core 不行）
@@ -52,13 +52,14 @@ src/main/java/com/example/examplemod/
 ├── client/                  # 仅客户端：ClientSetup / ClientPacketHandlers / render/
 ├── datagen/                 # 数据生成 provider（DataGenerators 是入口）
 ├── gametest/                # GameTest，运行需要 run/gameteststructures/<测试名>.snbt
-├── mixin/                   # Mixin 类（1.20.1 依赖 refmap，见 build.gradle 的 mixin 块）
-└── docs/                    # nextCard开发文档.md（v1.0 规格：三条铁律 / 特例消灭表 / G1-G4 门）
+└── mixin/                   # Mixin 类（1.20.1 依赖 refmap，见 build.gradle 的 mixin 块）
 ```
+
+（规格文档不在上面这棵树里：它在仓库根的 `docs/nextCard开发文档.md`。）
 
 ### nextCard 项目速览
 
-- **规格**：`docs/nextCard开发文档.md`（v1.0 冻结）。三条铁律：内容不得约束架构 / 不允许特例 / 极致压缩。
+- **规格**：`docs/nextCard开发文档.md`（当前 v1.1）。三条铁律：内容不得约束架构 / 不允许特例 / 极致压缩。
 - **四道门**：G1 删光 `data/nextcard/` 引擎照跑；G2 `core/` 无内容字面量（连注释都查）；G3 蒙特卡洛概率性质（T5 不早于第 9 抽、标签份额 < 80%、15 抽不死局）；G4 = `logicTest`（JavaExec，见下）。
 - **示例内容可整体删除**（`src/main/resources/data/nextcard/`，16 张卡 + 3 标签 + 日程），删后游戏照常加载。
 - 首板正式卡表由使用者提供（整合包框架型定位）；挂点词表随卡表冻结（C3）。

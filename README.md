@@ -1,7 +1,7 @@
 # nextCard（MinecraftForge 1.20.1 / 作者 klze）
 
 抽卡构筑框架型 mod（适配整合包）：从世界中的抽卡方块获得卡片，以方向（A）/方式（B）/质变（C）三类卡构筑体系。
-**规格与拍板记录见 `docs/nextCard开发文档.md`（v1.0 冻结）**；本 README 保留模板的工程说明，工程实践部分依然适用。
+**规格与拍板记录见 `docs/nextCard开发文档.md`（当前 v1.1）**；本 README 保留模板的工程说明，工程实践部分依然适用。
 
 > 本工程由 forge-1.20.1-mod-2 工程化模板派生（模板原始说明见下方各节；`六、改成你自己的模组` 已于 2026-09-20 执行完毕：mod_id=nextcard、包 com.klze.nextcard、作者 klze）。
 
@@ -23,7 +23,7 @@
 ## 一、常用命令
 
 ```bash
-./gradlew build                 # 编译 + 单测 + 重混淆 → build/libs/examplemod-1.0.0.jar
+./gradlew build                 # 编译 + 单测 + 重混淆 → build/libs/nextcard-0.1.0.jar
 ./gradlew runClient             # 开发客户端
 ./gradlew runServer             # 开发服务端（首次需自行在 run/eula.txt 同意 EULA）
 ./gradlew runData               # 数据生成 → src/generated/resources（生成物要提交）
@@ -62,8 +62,10 @@ forge-1.20.1-mod-3/
 ├── .github/workflows/build.yml   # CI：build + runGameTestServer + 上传 jar
 ├── run/gameteststructures/       # GameTest 结构（手写 SNBT，必须提交）
 └── src/
-    ├── main/java/com/example/examplemod/
-    │   ├── ExampleMod.java       # 入口，只做编排（≤40 行）
+    ├── main/java/com/klze/nextcard/
+    │   ├── NextCard.java       # 入口，只做编排（≤40 行）
+    │   ├── core/               # 引擎：card/tag/pool/draw/effect/load（零内容知识，可无头测试）
+    │   ├── sim/                # 蒙特卡洛与参考场景（允许引用示例内容，core 不行）
     │   ├── common/               # 两端逻辑：registry / config / network / tags / util
     │   ├── client/               # 仅客户端：ClientSetup / ClientPacketHandlers / render
     │   ├── datagen/              # 数据生成 provider（DataGenerators 为入口）
@@ -142,7 +144,7 @@ mklink /J C:\mcdev "C:\Users\Administrator\Documents\开发\mod"
 
 ## 七、发布
 
-`./gradlew build` 后把 **`build/libs/examplemod-1.0.0.jar`**（已 SRG 重混淆，且内嵌了 MixinExtras）丢进
+`./gradlew build` 后把 **`build/libs/nextcard-0.1.0.jar`**（已 SRG 重混淆，且内嵌了 MixinExtras）丢进
 `mods/` 目录即可，客户端需要同 MC 版本的 Forge 1.20.1。`build/devlibs/` 里的同名 jar 只用于开发环境，不要发布。
 
 发到平台上：
