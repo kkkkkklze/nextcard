@@ -10,6 +10,8 @@ import com.klze.nextcard.core.draw.DrawSchedule;
 import com.klze.nextcard.core.draw.TagWeights;
 import com.klze.nextcard.core.draw.WeightModel;
 import com.klze.nextcard.core.effect.EffectSnapshot;
+import com.klze.nextcard.core.effect.MechanicProfile;
+import com.klze.nextcard.core.effect.ModifierClause;
 import com.klze.nextcard.core.effect.Reconciler;
 import com.klze.nextcard.core.pool.PoolIndex;
 import com.klze.nextcard.sim.Scenario;
@@ -243,6 +245,61 @@ public class NextCardLogicTest {
                 "T5 must not appear before draw 9; samples: " + String.join(" || ", report.violationDetails()));
         assertTrue(report.tagBranchSlots() > 0, "owned tags must eventually steer draws");
         assertTrue((double) report.tagBranchSlots() / report.totalSlots() < WeightModel.CAP);
+    }
+
+    /** 类型化差量：卡与体系的进出带种类，消费方不必解析字符串前缀。 */
+    @Test
+    public void reconcilerDiffIsTyped() {
+        EffectSnapshot before = new EffectSnapshot(Set.of(rl("a"), rl("b")), Set.of(rl("sys_a")));
+        EffectSnapshot after = new EffectSnapshot(Set.of(rl("b"), rl("c")), Set.of(rl("sys_c")));
+
+        List<Reconciler.Change> changes = Reconciler.diff(before, after);
+        assertTrue(changes.contains(new Reconciler.Change(Reconciler.Kind.CARD_GAINED, rl("c"))), "c gained");
+        assertTrue(changes.contains(new Reconciler.Change(Reconciler.Kind.CARD_LOST, rl("a"))), "a lost");
+        assertTrue(changes.contains(new Reconciler.Change(Reconciler.Kind.SYSTEM_CLOSED, rl("sys_a"))), "sys_a closed");
+        assertTrue(changes.contains(new Reconciler.Change(Reconciler.Kind.SYSTEM_OPENED, rl("sys_c"))), "sys_c opened");
+        assertEquals(4, changes.size(), "untouched card b must not appear: " + changes);
+    }
+
+    /**
+     * 槽位级差量：MC 侧撤旧挂新需要"哪个槽位、从多少到多少"。
+     * 两张卡改同一槽位时，只有卡级差量会给出 +id/-id 而看不出净变化。
+     */
+    @Test
+    public void slotDiffReportsNetValueChangePerSlot() {
+        MechanicProfile before = MechanicProfile.fold(List.of(modifier("window.length", 0.30)), id -> 0);
+        MechanicProfile after = MechanicProfile.fold(List.of(modifier("window.length", 0.80)), id -> 0);
+
+        List<Reconciler.SlotChange> changes = Reconciler.slotDiff(before, after);
+        assertEquals(1, changes.size(), "one slot moved");
+        Reconciler.SlotChange only = changes.get(0);
+        assertEquals("window.length", only.slot(), "slot id doubles as the stable-UUID ingredient");
+        assertEquals(0.30, only.from(), 1e-9);
+        assertEquals(0.80, only.to(), 1e-9);
+        assertTrue(only.numericChanged());
+        assertFalse(only.uncappedChanged());
+
+        assertTrue(Reconciler.slotDiff(before, before).isEmpty(), "recomputing the same cards must be a no-op");
+    }
+
+    /** 解除上限是一种独立形态，不能靠"写一个更大的数字"表达，所以差量里单独一类。 */
+    @Test
+    public void slotDiffDistinguishesUncapFromRaise() {
+        MechanicProfile raised = MechanicProfile.fold(List.of(modifier("window.length", 5.0)), id -> 0);
+        MechanicProfile uncap = MechanicProfile.fold(
+                List.of(modifier("window.length", 0.0), uncappedModifier("window.length")), id -> 0);
+
+        List<Reconciler.SlotChange> changes = Reconciler.slotDiff(raised, uncap);
+        assertEquals(1, changes.size());
+        assertTrue(changes.get(0).uncappedChanged(), "uncap must show up as its own change kind");
+    }
+
+    private static ModifierClause modifier(String target, double value) {
+        return new ModifierClause(target, value, "", 0.0, List.of());
+    }
+
+    private static ModifierClause uncappedModifier(String target) {
+        return new ModifierClause(target, 0.0, "", true, "", 0.0, List.of());
     }
 
     private static ResourceLocation rl(String path) {
