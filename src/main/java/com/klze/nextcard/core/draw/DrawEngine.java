@@ -102,7 +102,11 @@ public final class DrawEngine {
                 }
             }
             if (allowedTiers.isEmpty()) {
-                allowedTiers.addAll(byTier.keySet());
+                // 日程是更高法则：本抽内日程允许的等级已被前面几格抽干时，这一格**空着**（少给一张），
+                // 绝不回补日程权重为 0 的等级——否则五槽形态下 T5 会漏进第 8 抽。
+                log.add("slot" + slotIndex + " empty: schedule-approved tiers exhausted this draw");
+                slotIndex++;
+                continue;
             }
             allowedTiers.sort(Integer::compareTo);
             boolean classRestricted = false;
