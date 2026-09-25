@@ -82,6 +82,7 @@ public final class ContentReader {
             errors.addAll(prefixed(path, parsedEffects.errors()));
             cards.add(CardDefinition.of(id, body, parsedEffects.value()));
         }
+        errors.addAll(EffectClauses.validateReferences(cards));
         LoadResult<CardIndex> index = CardIndex.build(cards, tags);
         List<String> all = new ArrayList<>(errors);
         all.addAll(index.errors());

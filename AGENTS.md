@@ -62,7 +62,10 @@ src/main/java/com/klze/nextcard/
 - **规格**：`docs/nextCard开发文档.md`（当前 v1.1）。三条铁律：内容不得约束架构 / 不允许特例 / 极致压缩。
 - **四道门**：G1 删光 `data/nextcard/` 引擎照跑；G2 `core/` 无内容字面量（连注释都查）；G3 蒙特卡洛概率性质（T5 不早于第 9 抽、标签份额 < 80%、15 抽不死局）；G4 = `logicTest`（JavaExec，见下）。
 - **示例内容可整体删除**（`src/main/resources/data/nextcard/`，16 张卡 + 3 标签 + 日程），删后游戏照常加载。
-- 首板正式卡表由使用者提供（整合包框架型定位）；挂点词表随卡表冻结（C3）。
+- 首板正式卡表由使用者提供（整合包框架型定位）；挂点词表随卡表冻结（C3）——
+  **已注册的第一批语汇（盾反 / 蓄力）见 `docs/机制词表-已注册.md`**：四类子句（`stacks` / `trigger` /
+  `mechanic` / `mechanic_modifier`）+ 槽位与合成方式 + 条件/动作词表 + 加载期硬错误清单。
+  写内容前先读那份文档；写新机制先注册槽位，不要为某张卡加字段。
 
 ## 写代码时的硬性约定
 
@@ -87,9 +90,18 @@ src/main/java/com/klze/nextcard/
   **本项目的纯逻辑测试已改走 `./gradlew logicTest`（JavaExec 直接喂 classpath，中文路径下可用）**；`:test` 任务仅在 ASCII 路径/CI 上补充执行 JUnit 平台。
 - Parchment 映射默认关闭（下载走 Google Storage，国内不通），需要时按 README 打开。
 - 若依赖下载出现 `Connection reset`，先检查是不是又走了 `maven.neoforged.net`（应使用 `neoforged.forgecdn.net`）。
+- **构建需要 JDK 21**：ModDevGradle 的工具链（`createMinecraftArtifacts`）要求 Java 21，而本模组自身编译用 17，
+  两者都要能找到。`gradle.properties` 的 `org.gradle.java.installations.paths` 里如果只写了 JDK 17 的路径，
+  构建会报 `Cannot find a Java installation ... languageVersion=21`（automatic provisioning 走 foojay，国内不通）。
+  临时用命令行补上即可，不必改文件：
+  ```bash
+  ./gradlew logicTest -Porg.gradle.java.installations.paths="<JDK21 路径>,<JDK17 路径>"
+  ```
+  首次构建会先跑 `createMinecraftArtifacts`（下载 MC/Forge 并反编译合并，数分钟；产物在 `build/moddev/artifacts`）。
 
 ## 参考文档
 
+- **机制词表（已注册语汇，写内容前必读）**：`docs/机制词表-已注册.md`
 - ModDevGradle Legacy（1.20.1 官方工具链）：https://github.com/neoforged/ModDevGradle/blob/main/LEGACY.md
 - Forge 1.20.1 文档：https://docs.minecraftforge.net/en/1.20.1/
 - 本仓库 README：镜像清单、改名步骤、发布说明
