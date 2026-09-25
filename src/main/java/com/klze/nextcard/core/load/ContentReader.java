@@ -89,7 +89,7 @@ public final class ContentReader {
         return new LoadResult<>(index.value(), all);
     }
 
-    private static ResourceLocation idOfPath(String path, List<String> errors) {
+    static ResourceLocation idOfPath(String path, List<String> errors) {
         int colon = path.indexOf(':');
         int slash = path.lastIndexOf('/');
         int dot = path.lastIndexOf('.');
