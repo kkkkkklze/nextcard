@@ -26,4 +26,18 @@ public final class Strict {
         }
         return unknown;
     }
+
+    /**
+     * 同上，但每条报错带上上下文——效果子句的键名如果只报一个孤立单词（{@code meters}），
+     * 内容作者定位不到是哪个子句写错了。
+     */
+    public static List<String> unknownKeys(JsonObject json, Set<String> allowed, String context) {
+        List<String> unknown = new ArrayList<>();
+        for (String key : json.keySet()) {
+            if (!allowed.contains(key)) {
+                unknown.add(context + ": unknown key " + key);
+            }
+        }
+        return unknown;
+    }
 }
