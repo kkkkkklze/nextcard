@@ -30,6 +30,7 @@ public final class NextCardLogicTestRunner {
             CounterStoreTest.class,
             TestSuiteAuditTest.class,
             CadenceTest.class,
+            EffectHostTest.class,
     };
 
     private NextCardLogicTestRunner() {
