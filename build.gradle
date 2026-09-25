@@ -234,7 +234,8 @@ tasks.register('logicTest', JavaExec) {
     mainClass = 'com.klze.nextcard.logic.NextCardLogicTestRunner'
     jvmArgs '-Dfile.encoding=UTF-8',
             "-Dnextcard.content.dir=${file('src/main/resources/data/nextcard')}",
-            "-Dnextcard.core.src=${file('src/main/java/com/klze/nextcard/core')}"
+            "-Dnextcard.core.src=${file('src/main/java/com/klze/nextcard/core')}",
+            "-Dnextcard.test.src=${file('src/test/java')}"
     standardOutput = System.out
 }
 
@@ -259,6 +260,7 @@ tasks.named('test', Test).configure {
     // is not skipped (ASCII path) and runs the JUnit platform.
     systemProperty 'nextcard.content.dir', file('src/main/resources/data/nextcard').absolutePath
     systemProperty 'nextcard.core.src', file('src/main/java/com/klze/nextcard/core').absolutePath
+    systemProperty 'nextcard.test.src', file('src/test/java').absolutePath
     onlyIf {
         if (nonAsciiProjectPath) {
             logger.lifecycle(":test skipped - project path contains non-ASCII characters ({}). " +
