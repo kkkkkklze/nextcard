@@ -29,6 +29,7 @@ public final class NextCardLogicTestRunner {
             ParryChargeVocabularyTest.class,
             CounterStoreTest.class,
             TestSuiteAuditTest.class,
+            CadenceTest.class,
     };
 
     private NextCardLogicTestRunner() {

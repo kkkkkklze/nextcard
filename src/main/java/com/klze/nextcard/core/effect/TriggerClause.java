@@ -31,15 +31,17 @@ import java.util.Set;
  * 绑在其它事件上是加载错误。</p>
  */
 public record TriggerClause(String on, double atSeconds, boolean inherits,
-                            double windowSeconds, int uses,
+                            double windowSeconds, int uses, double everySeconds,
                             List<Condition> when, List<Action> actions) implements EffectClause {
 
     /** {@code uses} 的缺省：窗口内不限次数。 */
     public static final int UNLIMITED_USES = -1;
     /** {@code at} 的缺省：不绑定蓄力点。 */
     public static final double NO_CHARGE_POINT = -1.0;
+    /** {@code every} 的缺省：不是周期触发，只被事件叫醒。 */
+    public static final double NOT_PERIODIC = 0.0;
 
-    private static final Set<String> KEYS = Set.of("type", "on", "at", "inherits", "window", "when", "actions");
+    private static final Set<String> KEYS = Set.of("type", "on", "at", "inherits", "window", "every", "when", "actions");
     private static final Set<String> WINDOW_KEYS = Set.of("seconds", "uses");
 
     public TriggerClause {
@@ -107,6 +109,21 @@ public record TriggerClause(String on, double atSeconds, boolean inherits,
         if (!StackClause.parseConditions(body, "when", conditions, errors)) {
             return null;
         }
+        double everySeconds = NOT_PERIODIC;
+        if (body.has("every")) {
+            if (!body.get("every").isJsonPrimitive() || !body.get("every").getAsJsonPrimitive().isNumber()) {
+                errors.add("trigger " + on + " every must be a number of seconds");
+                return null;
+            }
+            everySeconds = body.get("every").getAsDouble();
+            if (!(everySeconds > 0)) {
+                // 写成 0 / 负数不能当成「没写」：那是内容作者想给一个节奏、但给错了
+                errors.add("trigger " + on + " every must be positive seconds (omit the key for non-periodic): "
+                        + everySeconds);
+                return null;
+            }
+            Cadence.ticksOf(everySeconds);  // 换算失败一律在此抛，保证运行期不再有第二种口径
+        }
         if (!body.has("actions") || !body.get("actions").isJsonArray()) {
             errors.add("trigger " + on + " needs a non-empty actions array");
             return null;
@@ -122,7 +139,20 @@ public record TriggerClause(String on, double atSeconds, boolean inherits,
             errors.add("trigger " + on + " needs at least one valid action");
             return null;
         }
-        return new TriggerClause(on, atSeconds, inherits, windowSeconds, uses, conditions, actions);
+        return new TriggerClause(on, atSeconds, inherits, windowSeconds, uses, everySeconds, conditions, actions);
+    }
+
+    /** 是否周期触发（{@code every} 写了才是）。 */
+    public boolean periodic() {
+        return everySeconds > NOT_PERIODIC;
+    }
+
+    /** 周期折算成 tick；非周期 clause 调用它是错的，因此直接拒绝。 */
+    public int periodTicks() {
+        if (!periodic()) {
+            throw new IllegalStateException("trigger " + on + " is not periodic (no every key)");
+        }
+        return Cadence.ticksOf(everySeconds);
     }
 
     public boolean hasWindow() {
