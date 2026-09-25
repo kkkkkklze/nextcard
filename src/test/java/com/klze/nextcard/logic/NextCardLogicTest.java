@@ -131,6 +131,61 @@ public class NextCardLogicTest {
                 "A filter exhausted -> fallback logged");
     }
 
+    /**
+     * 日程是更高法则（真内容五槽形态）：第 8 抽的五格里，前一格一格把 T1~T3 候选出完之后，
+     * 剩下的格<b>不能</b>因此把日程里权重为 0 的 T5 拉进来——它应当空着（少给一张），而不是泄档。
+     *
+     * <p>门 G3 原本只跑 1~2 槽的参考场景（{@code sim/Scenario}），而线上内容是 5 槽
+     * （{@code data/nextcard/draw_profiles/standard.json}），所以「低级在本抽内被抽干」这条路径
+     * 从来没被覆盖过——本测试用五槽 profile 把它钉住。</p>
+     */
+    @Test
+    public void scheduleLawHoldsUnderFiveSlots() {
+        Scenario scenario = Scenario.load();
+        DrawProfile fiveSlots = new DrawProfile(java.util.Optional.empty(), List.of(
+                new DrawProfile.Slot(new DrawProfile.Filter(Optional.of(CardClass.A)), DrawProfile.Sampling.TAG_WEIGHTED),
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED),
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED),
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED),
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED)), DrawProfile.Grant.PICK_ONE);
+        DrawSchedule.Row row = scenario.schedule().forDraw(8).orElseThrow();
+
+        for (int seed = 0; seed < 500; seed++) {
+            DrawResult result = DrawEngine.draw(scenario.cards(), scenario.pools(), fiveSlots,
+                    row.tierWeights(), Set.of(), new Random(seed));
+            assertFalse(result.isEmpty(), "draw 8 must still offer something, seed=" + seed);
+            for (ResourceLocation offered : result.offers()) {
+                int tier = scenario.cards().byId().get(offered).tier();
+                assertTrue(tier < 5, "T5 leaked at draw 8 (seed " + seed + ", slot "
+                        + result.offers().indexOf(offered) + "): " + offered
+                        + " — 日程外等级不得因为本抽内低级抽干而回补");
+            }
+        }
+
+        // 五格会把日程内的等级在本抽内出完（参考场景只有 2 格，所以门 G3 从没走到这条路），
+        // 剩下那格必须在「日程外等级」面前空着，而不是回补 T5。
+        DrawProfile plainFiveSlots = new DrawProfile(java.util.Optional.empty(), List.of(
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED),
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED),
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED),
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED),
+                new DrawProfile.Slot(DrawProfile.Filter.NONE, DrawProfile.Sampling.TAG_WEIGHTED)), DrawProfile.Grant.PICK_ONE);
+        CardIndex tiny = CardIndex.build(List.of(
+                new CardDefinition(rl("t1_only_a"), 1, CardClass.B, Set.of(Scenario.TAG_ATTACK),
+                        Optional.empty(), List.of(), List.of()),
+                new CardDefinition(rl("t1_only_b"), 1, CardClass.B, Set.of(Scenario.TAG_FIRE),
+                        Optional.empty(), List.of(), List.of()),
+                new CardDefinition(rl("t5_ghost"), 5, CardClass.B, Set.of(Scenario.TAG_POISON),
+                        Optional.empty(), List.of(), List.of())), scenario.tags()).value();
+        PoolIndex tinyPools = PoolIndex.of(tiny);
+        for (int seed = 0; seed < 200; seed++) {
+            DrawResult leak = DrawEngine.draw(tiny, tinyPools, plainFiveSlots,
+                    Map.of(1, 100), Set.of(), new Random(seed));
+            assertFalse(leak.offers().contains(rl("t5_ghost")),
+                    "T5 leaked once the schedule-approved tier ran out mid-draw (seed " + seed + ")");
+        }
+    }
+
     /** 已拥有卡踢出候选；requires 标签谓词未满足的卡不进候选；满足后进候选（v1.1 语义）。 */
     @Test
     public void ownedCardsLeavePoolAndRequiresGate() {

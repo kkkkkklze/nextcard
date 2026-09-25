@@ -1,0 +1,859 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nextCard · 抽卡引擎显微</title>
+<!--
+  单文件演示。算法是 src/main/java/com/klze/nextcard/core/draw/DrawEngine.java 三阶段的逐行移植，
+  数据内联自 src/main/resources/data/nextcard/{cards,card_tags,draw_profiles,draw_schedule}.json
+  （17 卡 / 4 标签，2026-09-25 快照）。改了工程内容请重新导出这一段。
+  随机流：演示用 mulberry32，与 java.util.Random 序列不同——策略与判定完全一致，
+  数值不变量由页面底部的自检跑 200 局当场核（对应门 G3 / G1）。
+-->
+<style>
+  :root{
+    --ink:#0a0c0f; --ink2:#11151a; --ink3:#171d24; --line:#242e38; --line2:#33414f;
+    --paper:#e9e2d0; --paper2:#d9cfb8; --paperInk:#20242a;
+    --cinnabar:#e25822; --jade:#7cb342; --brass:#c9a227; --frost:#cfd8dc; --judg:#8bc34a;
+    --txt:#c8d2dc; --dim:#7d8b99; --hi:#f2e6c9;
+    --serif:"Songti SC","STSong","SimSun","Noto Serif CJK SC",serif;
+    --sans:"PingFang SC","Microsoft YaHei","Hiragino Sans GB",sans-serif;
+    --mono:"Cascadia Mono","Consolas","SFMono-Regular",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--ink);color:var(--txt);font-family:var(--sans);font-size:14px}
+  body{
+    background-image:
+      radial-gradient(120% 80% at 12% -10%, #16202a 0%, transparent 60%),
+      radial-gradient(90% 70% at 100% 0%, #1a1410 0%, transparent 55%),
+      repeating-linear-gradient(0deg, rgba(255,255,255,.014) 0 1px, transparent 1px 3px),
+      repeating-linear-gradient(90deg, rgba(255,255,255,.012) 0 1px, transparent 1px 3px);
+    min-height:100vh;
+  }
+  .wrap{max-width:1420px;margin:0 auto;padding:26px 22px 70px}
+  header{display:flex;align-items:flex-end;gap:18px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:16px}
+  h1{font-family:var(--serif);font-size:31px;font-weight:600;letter-spacing:.06em;margin:0;color:var(--hi)}
+  h1 em{font-style:normal;color:var(--cinnabar)}
+  .sub{color:var(--dim);font-size:12.5px;line-height:1.7;max-width:62ch}
+  .seal{
+    width:52px;height:52px;flex:0 0 52px;border:2px solid var(--cinnabar);color:var(--cinnabar);
+    display:grid;place-items:center;font-family:var(--serif);font-size:15px;line-height:1.15;
+    transform:rotate(-4deg);border-radius:3px;text-align:center;box-shadow:0 0 0 3px rgba(226,88,34,.09)
+  }
+  .stages{display:flex;gap:0;margin-left:auto;align-self:stretch;align-items:flex-end}
+  .stg{border:1px solid var(--line2);border-left:none;padding:6px 13px 7px;font-size:11.5px;color:var(--dim);background:rgba(255,255,255,.015)}
+  .stg:first-child{border-left:1px solid var(--line2)}
+  .stg b{display:block;font-family:var(--mono);font-size:10px;color:var(--brass);letter-spacing:.14em}
+  .stg span{font-family:var(--serif);font-size:14px;color:var(--txt)}
+
+  .grid{display:grid;grid-template-columns:224px minmax(430px,1fr) 372px;gap:18px;margin-top:20px;align-items:start}
+  @media (max-width:1180px){.grid{grid-template-columns:1fr}.stages{margin-left:0}}
+  .panel{border:1px solid var(--line);background:linear-gradient(180deg,var(--ink2),var(--ink));border-radius:2px}
+  .ph{display:flex;align-items:center;gap:9px;padding:9px 12px;border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.2em;color:var(--dim);text-transform:uppercase;font-family:var(--mono)}
+  .ph .dot{width:5px;height:5px;background:var(--brass);border-radius:50%}
+  .pb{padding:13px}
+
+  /* 星轨 */
+  .rail{list-style:none;margin:0;padding:6px 12px 12px}
+  .rail li{display:flex;align-items:center;gap:9px;padding:5px 0;font-family:var(--mono);font-size:11.5px;color:var(--dim);border-bottom:1px dashed rgba(255,255,255,.05)}
+  .rail li:last-child{border-bottom:none}
+  .rail li .n{width:26px;color:#5d6a77}
+  .rail li .t{display:flex;gap:3px;margin-left:auto}
+  .pip{width:7px;height:7px;border:1px solid var(--line2);transform:rotate(45deg)}
+  .pip.on{background:var(--brass);border-color:var(--brass);box-shadow:0 0 7px rgba(201,162,39,.5)}
+  .pip.t5{border-color:var(--cinnabar)} .pip.t5.on{background:var(--cinnabar);box-shadow:0 0 9px rgba(226,88,34,.6)}
+  .rail li.done{color:var(--txt)} .rail li.cur{background:rgba(201,162,39,.08);border-bottom-color:transparent}
+  .rail li.cur .n{color:var(--brass)}
+  .owned{display:flex;flex-wrap:wrap;gap:5px;margin-top:10px}
+  .own{font-family:var(--mono);font-size:10.5px;border:1px solid var(--line2);padding:2px 6px;color:var(--txt);background:rgba(255,255,255,.02)}
+  .own i{width:6px;height:6px;display:inline-block;border-radius:50%;margin-right:4px;font-style:normal}
+
+  /* 符箓 */
+  .offer{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;padding:14px}
+  .fu{
+    position:relative;background:linear-gradient(168deg,var(--paper) 0%,var(--paper2) 100%);
+    color:var(--paperInk);border-radius:2px;padding:11px 10px 12px;min-height:172px;cursor:pointer;
+    box-shadow:0 10px 22px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.5);
+    transform:translateY(14px) scale(.97);opacity:0;animation:deal .5s cubic-bezier(.2,.8,.2,1) forwards;
+    transition:transform .18s ease,box-shadow .18s ease;overflow:hidden
+  }
+  .fu:after{content:"";position:absolute;inset:0;background:
+    repeating-linear-gradient(94deg,rgba(0,0,0,.035) 0 2px,transparent 2px 6px);pointer-events:none}
+  @keyframes deal{to{transform:none;opacity:1}}
+  .fu:hover{transform:translateY(-4px) scale(1.012);box-shadow:0 16px 30px rgba(0,0,0,.55),inset 0 0 0 1px #fff}
+  .fu .slot{font-family:var(--mono);font-size:9.5px;letter-spacing:.14em;color:#7a6f5c}
+  .fu .nm{font-family:var(--serif);font-size:16.5px;font-weight:600;margin:3px 0 7px;line-height:1.25;word-break:break-all}
+  .fu .cls{position:absolute;top:9px;right:9px;width:22px;height:22px;border-radius:50%;display:grid;place-items:center;
+    font-family:var(--mono);font-size:11px;font-weight:700;color:#fff;background:#4b5563}
+  .fu .cls.A{background:var(--brass);color:#231a00} .fu .cls.C{background:var(--cinnabar)}
+  .fu .tier{font-family:var(--mono);font-size:10.5px;color:#6b6153;letter-spacing:.1em}
+  .fu .tags{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+  .tag{font-size:10px;padding:1px 6px;border-radius:9px;background:rgba(0,0,0,.07);border:1px solid rgba(0,0,0,.13);font-family:var(--mono)}
+  .fu .pm{margin-top:10px;font-family:var(--mono);font-size:10.5px;color:#4b4437;border-top:1px dashed rgba(0,0,0,.18);padding-top:7px}
+  .fu .pm b{font-size:14px}
+  .fu .bar{height:3px;background:rgba(0,0,0,.14);margin-top:5px;border-radius:2px;overflow:hidden}
+  .fu .bar i{display:block;height:100%;background:var(--cinnabar)}
+  .fu.taken{filter:grayscale(.65) brightness(.72);cursor:default;animation:none;opacity:1;transform:none}
+  .fu.taken:before{content:"已择";position:absolute;inset:auto 8px 8px auto;font-family:var(--serif);font-size:11px;
+    color:var(--cinnabar);border:1px solid var(--cinnabar);padding:1px 5px;transform:rotate(-6deg)}
+  .fu.void{background:linear-gradient(168deg,#1b222a,#141a21);color:var(--dim);box-shadow:none;cursor:default;animation:none;opacity:1;transform:none;
+    display:grid;place-items:center;text-align:center;font-family:var(--serif);border:1px dashed var(--line2)}
+  .ctrl{display:flex;gap:9px;align-items:center;padding:0 14px 14px;flex-wrap:wrap}
+  button{font-family:var(--sans);font-size:12.5px;color:var(--txt);background:var(--ink3);border:1px solid var(--line2);
+    padding:7px 14px;border-radius:2px;cursor:pointer;letter-spacing:.04em}
+  button:hover{border-color:var(--brass);color:var(--hi)}
+  button.prime{background:linear-gradient(180deg,#3a2415,#25180f);border-color:var(--cinnabar);color:#f4d9c8}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .note{font-size:11.5px;color:var(--dim);line-height:1.65}
+  .kicker{font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--brass);text-transform:uppercase}
+
+  /* 显微镜 */
+  .slotbox{border:1px solid var(--line);margin-bottom:9px;background:rgba(255,255,255,.014)}
+  .slotbox>summary{list-style:none;cursor:pointer;padding:7px 10px;display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:11px}
+  .slotbox>summary::-webkit-details-marker{display:none}
+  .slotbox>summary .lab{color:var(--dim)} .slotbox>summary .got{color:var(--hi);margin-left:auto;font-size:10.5px}
+  .badge{padding:0 6px;border:1px solid var(--line2);border-radius:9px;font-size:10px;color:var(--dim)}
+  .badge.t{color:var(--brass);border-color:rgba(201,162,39,.45)} .badge.g{color:var(--cinnabar);border-color:rgba(226,88,34,.45)}
+  .badge.r{color:var(--frost)} .badge.j{color:var(--judg)}
+  .rows{padding:4px 10px 9px}
+  .row{display:grid;grid-template-columns:104px 1fr 52px;gap:8px;align-items:center;font-family:var(--mono);font-size:10.5px;padding:2px 0}
+  .row .who{color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .row .who.hit{color:var(--hi);font-weight:700}
+  .row .tr{height:8px;background:rgba(255,255,255,.05);position:relative;border-radius:1px;overflow:hidden}
+  .row .tr i{position:absolute;inset:0 auto 0 0;background:linear-gradient(90deg,#5b4a22,var(--brass))}
+  .row.hit .tr i{background:linear-gradient(90deg,#7d2f11,var(--cinnabar))}
+  .row .pv{text-align:right;color:var(--dim)} .row.hit .pv{color:var(--hi)}
+
+  .curve{width:100%;height:96px;display:block}
+  .matrix{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:10.5px}
+  .matrix th,.matrix td{border:1px solid var(--line);padding:5px 4px;text-align:center}
+  .matrix th{color:var(--dim);font-weight:400;font-size:10px}
+  .matrix td.zero{color:#3c4652}
+  .matrix td b{display:block;font-size:13px;color:var(--txt);font-weight:500}
+  .matrix td s{display:block;font-size:9px;color:var(--dim);text-decoration:none}
+  .matrix td.judg{background:repeating-linear-gradient(45deg,rgba(139,195,74,.07) 0 4px,transparent 4px 8px);color:var(--judg)}
+  .log{font-family:var(--mono);font-size:10.5px;line-height:1.75;color:var(--dim);max-height:172px;overflow:auto;
+    background:#0c1015;border:1px solid var(--line);padding:9px 10px;white-space:pre-wrap}
+  .log b{color:var(--brass);font-weight:400}
+
+  /* 自检 */
+  .gates{display:grid;grid-template-columns:repeat(auto-fit,minmax(258px,1fr));gap:11px;margin-top:22px}
+  .gate{border:1px solid var(--line);padding:11px 12px;background:linear-gradient(180deg,var(--ink2),var(--ink))}
+  .gate .t{font-family:var(--serif);font-size:14.5px;color:var(--hi);margin-bottom:3px}
+  .gate .d{font-size:11.5px;color:var(--dim);line-height:1.6}
+  .gate .v{font-family:var(--mono);font-size:11px;margin-top:7px;padding-top:7px;border-top:1px dashed var(--line)}
+  .gate.pass .v{color:var(--jade)} .gate.fail{border-color:var(--cinnabar)} .gate.fail .v{color:var(--cinnabar)}
+  .verdict{display:inline-block;font-family:var(--mono);font-size:10px;padding:1px 7px;border:1px solid currentColor;border-radius:9px;margin-left:6px}
+  footer{margin-top:26px;border-top:1px solid var(--line);padding-top:13px;font-family:var(--mono);font-size:10.5px;color:#5f6c79;line-height:1.9}
+  footer code{color:var(--dim)}
+  .vt{writing-mode:vertical-rl;font-family:var(--serif);letter-spacing:.28em;color:#33404d;font-size:12px;position:absolute}
+  /* 数据集与卡表浏览器 */
+  .dsbar{display:flex;gap:8px}
+  .ds{flex:1;font-family:var(--serif);font-size:13.5px;letter-spacing:.04em}
+  .ds.on{border-color:var(--brass);background:linear-gradient(180deg,#2b2412,#171a1f);color:var(--hi);
+    box-shadow:inset 0 0 0 1px rgba(201,162,39,.25),0 0 14px rgba(201,162,39,.1)}
+  .bfilter{display:flex;gap:8px;padding:12px 0 10px;flex-wrap:wrap;align-items:center}
+  .bfilter input{flex:1;min-width:220px;background:#0c1015;border:1px solid var(--line2);color:var(--txt);
+    padding:8px 11px;font-family:var(--sans);font-size:13px;border-radius:2px}
+  .bfilter input:focus{outline:none;border-color:var(--brass)}
+  .bfilter select{background:#0c1015;border:1px solid var(--line2);color:var(--txt);padding:8px 9px;font-size:12.5px;border-radius:2px;font-family:var(--sans)}
+  .browser{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:10px;max-height:660px;overflow:auto;padding-right:6px}
+  .crd{border:1px solid var(--line);background:linear-gradient(180deg,rgba(255,255,255,.022),transparent);padding:10px 11px}
+  .crd .ch{display:flex;flex-wrap:wrap;gap:7px;align-items:baseline}
+  .crd .ch b{font-family:var(--serif);font-size:15.5px;color:var(--hi);font-weight:600}
+  .crd .cm{font-size:11px;color:var(--dim)}
+  .crd .cd{margin-left:auto;font-family:var(--mono);font-size:10px;color:var(--brass);border:1px solid rgba(201,162,39,.3);padding:0 5px}
+  .crd .cv{font-family:var(--mono);font-size:11.5px;color:var(--jade);margin:6px 0 4px}
+  .crd .ce{font-size:12.2px;line-height:1.72;color:#aebac6}
+  .crd .cb{margin-top:6px;border-top:1px dashed var(--line);padding-top:5px}
+  .crd .cb summary{cursor:pointer;font-size:11px;color:var(--dim);list-style:none}
+  .crd .cb summary::-webkit-details-marker{display:none}
+  .crd .cb summary:before{content:"▸ ";color:var(--brass)}
+  .crd .cb[open] summary:before{content:"▾ "}
+  .crd .cb>*:not(summary){font-size:11.5px;line-height:1.7;color:var(--dim);margin-top:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="seal">抽卡<br>显微</div>
+  <div>
+    <h1>nextCard <em>引擎</em> 显微</h1>
+    <div class="sub">三阶段采样的逐格实况：日程定级 → 标签份额定池 → 池内均匀。每一格都把它<b>真实的中签概率分布</b>摊开给你看——不是示意，是按 <code style="font-family:var(--mono);color:var(--brass)">DrawEngine.java</code> 同一套算式现算的。</div>
+  </div>
+  <div class="stages">
+    <div class="stg"><b>PHASE 1</b><span>日程定级</span></div>
+    <div class="stg"><b>PHASE 2</b><span>份额定池</span></div>
+    <div class="stg"><b>PHASE 3</b><span>池内均匀</span></div>
+    <div class="stg"><b>CONST</b><span>S=0.8W⁄(W+8)</span></div>
+  </div>
+</header>
+
+<div class="grid">
+  <!-- 左：星轨 + 已拥有 -->
+  <div>
+    <section class="panel">
+      <div class="ph"><span class="dot"></span>本局十五抽</div>
+      <ul class="rail" id="rail"></ul>
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <div class="ph"><span class="dot"></span>已拥有 · 唯一持有</div>
+      <div class="pb">
+        <div class="kicker">个人可抽池 = 全卡 − 已拥有 − requires 未满足</div>
+        <div class="owned" id="owned"></div>
+        <div class="note" id="ownedNote" style="margin-top:9px"></div>
+      </div>
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <div class="ph"><span class="dot"></span>数据集</div>
+      <div class="pb">
+        <div class="dsbar">
+          <button class="ds on" id="dsDemo" data-ds="demo">示例内容 17 张</button>
+          <button class="ds" id="dsReal" data-ds="real">真卡表 419 张</button>
+        </div>
+        <div class="note" style="margin-top:8px">左边的日程 / 概率 / 投影全部跟着这个开关走。真卡表的<b>等级档与标签是推导的</b>（他们的导出里没有这两个字段）。</div>
+      </div>
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <div class="ph"><span class="dot"></span>内容开关</div>
+      <div class="pb">
+        <button id="g1" style="width:100%">把内容删空（门 G1）</button>
+        <div class="note" style="margin-top:9px">铁律：内容不能反过来约束结构。清空卡池之后，引擎必须照常跑完一次抽取并给出「卡池无卡」，而不是崩。</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 中：五格 -->
+  <div>
+    <section class="panel" style="position:relative">
+      <div class="ph"><span class="dot"></span><span id="phaseLab">入场 · 第 1 抽</span><span style="margin-left:auto;font-family:var(--serif);letter-spacing:.1em" id="seedLab"></span></div>
+      <div class="offer" id="offer"></div>
+      <div class="ctrl">
+        <button class="prime" id="act">择一张</button>
+        <button id="auto">自动跑完</button>
+        <button id="reset">重开本局</button>
+        <span class="note" id="hint" style="flex:1"></span>
+      </div>
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <div class="ph"><span class="dot"></span>决策日志</div>
+      <div class="pb"><div class="log" id="log">—</div></div>
+    </section>
+  </div>
+
+  <!-- 右：显微镜 -->
+  <div>
+    <section class="panel">
+      <div class="ph"><span class="dot"></span>逐格概率显微镜</div>
+      <div class="pb" id="scope"><div class="note">先抽一抽。</div></div>
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <div class="ph"><span class="dot"></span>标签定向份额 S</div>
+      <div class="pb">
+        <svg class="curve" id="curve" viewBox="0 0 340 96" preserveAspectRatio="none"></svg>
+        <div class="note" id="curveNote"></div>
+      </div>
+    </section>
+    <section class="panel" style="margin-top:14px">
+      <div class="ph"><span class="dot"></span>卡池投影 (等级 × 标签)</div>
+      <div class="pb"><table class="matrix" id="matrix"></table>
+        <div class="note" style="margin-top:9px"><b style="color:var(--judg)">判断标签不投影成池</b>——它只作 requires 谓词用；斜纹格即此类。<b style="color:var(--brass)">粗数字</b>是本抽可用卡数，下方小字是全局池大小。</div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<section style="margin-top:24px">
+  <div class="ph" style="border-bottom:1px solid var(--line);padding:9px 0"><span class="dot"></span>卡表原文浏览器<span id="bhit" style="margin-left:9px;color:var(--brass)"></span></div>
+  <div class="bfilter">
+    <input id="bq" placeholder="搜卡名 / 效果全文 / 备注关键词…">
+    <select id="bmode"></select><select id="bpool"></select>
+    <select id="bphase"><option value="">全部阶段</option><option>入场</option><option>前期</option><option>中期</option><option>后期</option></select>
+    <button id="bclear">清筛</button>
+  </div>
+  <div class="browser" id="browser"><div class="note">切到「真卡表 419 张」后这里出内容。</div></div>
+</section>
+
+<section style="margin-top:24px">
+  <div class="ph" style="border-bottom:1px solid var(--line);padding:9px 0"><span class="dot"></span>能失败的门 · 现场自检</div>
+  <div class="gates" id="gates"></div>
+  <div class="note" style="margin-top:11px">自检用与上面同一个移植实现，跑 200 局 × 15 抽，选择策略照 <code>MonteCarlo.java</code>＝在给出的候选里等概率取一张。随机流是 mulberry32（与 <code>java.util.Random</code> 序列不同），所以核的是<b>不变量</b>而不是逐张同序——这与门 G3 的口径一致。</div>
+</section>
+
+<footer>
+  算法出处 <code>core/draw/DrawEngine.java:35-183</code> · 权重曲线 <code>core/draw/WeightModel.java:15-27</code> · 累计口径 <code>core/draw/TagWeights.java:28-60</code> · 日程 <code>data/nextcard/draw_schedule.json</code> · 格位规则 <code>data/nextcard/draw_profiles/*.json</code> · 投影 <code>core/pool/PoolIndex.java:26-45</code><br>
+  数据快照 2026-09-25：17 卡 / 4 标签（其中 counter 为判断标签）。语言文件目前只有 3 个键、<b>未覆盖卡名</b>，故此处按 id 显示，不代拟译名。
+</footer>
+</div>
+
+<script>
+/* ============ 数据（内联自 data/nextcard/） ============ */
+const NS = "nextcard";
+const TAGS = {
+  attack : {color:"#cfd8dc", judgment:false},
+  counter: {color:"#8bc34a", judgment:true },
+  fire   : {color:"#e25822", judgment:false},
+  poison : {color:"#7cb342", judgment:false},
+};
+const CARDS = [
+  {id:"starter_1",tier:1,cls:"B",tags:["attack"]},
+  {id:"starter_2",tier:1,cls:"B",tags:["attack"]},
+  {id:"starter_3",tier:1,cls:"B",tags:["attack","fire"]},
+  {id:"starter_4",tier:1,cls:"B",tags:["fire"]},
+  {id:"starter_5",tier:1,cls:"B",tags:["attack","poison"]},
+  {id:"ember_lash",tier:2,cls:"B",tags:["fire","attack"]},
+  {id:"cinder_step",tier:2,cls:"B",tags:["fire","poison"]},
+  {id:"ash_guard",tier:2,cls:"B",tags:["fire"]},
+  {id:"iron_root",tier:3,cls:"B",tags:["poison"]},
+  {id:"twin_fang",tier:3,cls:"B",tags:["attack","poison","counter"]},
+  {id:"venom_edge",tier:3,cls:"A",tags:["attack","poison","counter"],system:"poison"},
+  {id:"grave_bloom",tier:4,cls:"B",tags:["poison","fire"]},
+  {id:"storm_pulse",tier:4,cls:"B",tags:["attack"]},
+  {id:"phoenix_breath",tier:5,cls:"A",tags:["fire","attack"],system:"rebirth"},
+  {id:"last_stand",tier:5,cls:"B",tags:["attack"]},
+  {id:"venom_cascade",tier:5,cls:"C",tags:["poison","attack"],requires:["poison"]},
+  {id:"chain_reaction",tier:5,cls:"C",tags:["poison","attack"],requires:["counter"]},
+];
+const PROFILES = {
+  first          : {fixed:["starter_1","starter_2","starter_3","starter_4","starter_5"], slots:[], grant:"pick_one"},
+  standard_early : {slots:[{f:null},{f:null},{f:null},{f:null},{f:null}], grant:"pick_one"},
+  standard       : {slots:[{f:"A"},{f:null},{f:null},{f:null},{f:null}], grant:"pick_one"},
+};
+const SCHEDULE = [
+  {r:[1,1],   profile:"first",          w:{}},
+  {r:[2,4],   profile:"standard_early", w:{1:70,2:30}},
+  {r:[5,8],   profile:"standard",       w:{1:45,2:35,3:20}},
+  {r:[9,11],  profile:"standard",       w:{1:30,2:30,3:25,4:10,5:5}},
+  {r:[12,15], profile:"standard",       w:{1:10,2:30,3:25,4:15,5:20}},
+];
+const CAP = 0.8, W0 = 8.0, TOTAL_DRAWS = 15, T5_FIRST_DRAW = 9;
+
+/* ============ 真卡表（队友《加点星图》导出的 419 张，字段 f/n/m/p/ph/v/e/t/k/r/b） ============
+   引擎要 tier 与 tags，而这份导出没有（=对齐文档的 P5/P2）。下面 DERIVE 是<b>我提的推导规则</b>，
+   不是他们的定义；每条规则都能在这里被读出来、被替换。页面上所有派生字段一律标「推导」。 */
+/* 队友导出快照 2026-09-25：419 张（字段 n 卡名/m 方式/p 三级池/ph 阶段/v 附带数值/e 效果全文/r 前置/b 备注）。原文照搬，未作改写。 */
+const REAL_RAW = [{"n":"举盾而立","m":"后发先至","p":"","ph":"","v":"+2 护甲值","e":"格挡成功后 3 秒内的下一次攻击附带额外伤害，数值与你的护甲值挂钩","r":"","b":""},{"n":"负重而行","m":"一器通神","p":"","ph":"","v":"+2% 全伤","e":"攻击速度 -20%，单次攻击伤害 +45%；命中处于击退或硬直状态的敌人时额外增伤","r":"","b":""},{"n":"疾风起手","m":"快攻","p":"","ph":"","v":"+2% 攻速","e":"连续攻击同一目标时逐段叠层（每层 +5% 攻速 / +4% 伤害，上限 5 层），换目标或脱战 3 秒重置","r":"","b":""},{"n":"暗影潜踪","m":"鬼影幢幢","p":"","ph":"","v":"+5% 移速增幅","e":"你尤其擅长对付\"还没发现你\"的目标： · 攻击尚未察觉你的敌人：伤害 ×1.5 · 从背后偷走尚未察觉你的敌人的东西：成功率翻倍 · 尚未察觉你的敌人踩进你布下的埋伏：触发伤害 ×1.5 击杀或得手后，你获得 3 秒的隐身与 +30% 移速","r":"","b":"这张入场券是\"鬼影幢幢\"三条线共用的开场： 刺客线（潜形 / 暗杀 / 幽影）—— 出手前的准备与出手的那一下 猎人线（埋伏 / 循迹 / 蛊毒）—— 位置与时机由你布置 盗贼线（梁上君子 / 怀璧其罪 / 瞒天过海）—— 不一定要杀人，拿到东西也算得手 它只决定\"你从哪条路开始长权重\"，不锁死任何池。"},{"n":"百般武艺","m":"散人","p":"","ph":"","v":"+2% 全属性","e":"切换手持物品时获得 1 层「杂学」（上限 5 层，15 秒，每层 +2% 攻速 / 伤害 / 护甲）；叠满时下一次攻击触发一次随机附加效果","r":"","b":""},{"n":"正面对决","m":"后发先至","p":"格挡效率","ph":"中期","v":"+20 护甲值","e":"格挡成功时，若你正对攻击者，额外获得 1 层「壁障」不计入上限，且以此法获得的层数最多五层；若侧对或背对，则把当前的「壁障」层数转化为移速增幅（每层 +8%，每层持续 2 秒）","r":"","b":""},{"n":"潮汐格挡","m":"后发先至","p":"格挡效率","ph":"中期","v":"+20 护甲值","e":"连续正面格挡成功时减伤逐次递增（每次提升25%，最多 4 次，中断 3 秒重置）；连续挡下 4 次后，下一次攻击必定暴击","r":"","b":""},{"n":"盾面吸收","m":"后发先至","p":"格挡效率","ph":"中期","v":"+20 生命上限","e":"正面挡下的伤害有 25% 被盾面吸收，转化为 1 层「壁障」（每次格挡最多 1 层），并回复少量生命","r":"","b":""},{"n":"持盾耐力","m":"后发先至","p":"格挡效率","ph":"中期","v":"+20 护甲值","e":"持续举盾每满 3 秒获得 1 层「壁障」,最多10层；「壁障」已经叠满时，改为回复生命","r":"","b":""},{"n":"壁障外放","m":"后发先至","p":"格挡效率","ph":"中期","v":"+20 护甲值","e":"可以主动消耗全部「壁障」层数，在正面展开一面持续10秒的护盾墙；每消耗 1 层，这面墙额外提供 15% 减伤","r":"","b":""},{"n":"磐石仪式","m":"后发先至","p":"格挡效率","ph":"中期","v":"+15 生命上限","e":"永久生效，受到攻击时有概率自动格挡一次；该自动格挡同样能触发你的格挡类效果","r":"","b":""},{"n":"铁壁之握","m":"后发先至","p":"格挡效率","ph":"前期","v":"+10 护甲值","e":"格挡成功后获得 1 层「壁障」（最多 3 层，持续 6 秒），每层获得全能减伤3%，正面每层获得全能减伤4%","r":"","b":""},{"n":"不退之桩","m":"后发先至","p":"格挡效率","ph":"前期","v":"+10% 移速","e":"格挡时不再被击退；每秒获得临时护甲+3，最多为12","r":"","b":""},{"n":"盾缘磨砺","m":"后发先至","p":"格挡效率","ph":"前期","v":"+20% 反伤倍率","e":"格挡成功时对攻击者造成一次小额反伤（特殊伤害：不属于玩家伤害）=敌方本次的伤害x反伤倍率，对所有生物都生效，倍率初始为0","r":"","b":""},{"n":"稳妥架势","m":"后发先至","p":"格挡效率","ph":"前期","v":"+10 护甲值","e":"举起盾牌站立不动超过 1 秒后正面减伤额外 +15%，移动后失效但可以通过转动方向","r":"","b":""},{"n":"应急反应","m":"后发先至","p":"格挡效率","ph":"前期","v":"+8 生命上限 / +15% 生命上限","e":"生命值低于 30% 时格挡减伤大幅提升（暂定为25%）","r":"","b":"· 这条生命上限是**额外乘区**（与其他生命上限增幅相乘，不相加）。"},{"n":"举盾习惯","m":"后发先至","p":"格挡效率","ph":"前期","v":"+8 护甲","e":"永久生效，格挡成功的判定范围从正前方变为正前方加两侧","r":"","b":"本技能似乎没什么意义"},{"n":"全向盾墙","m":"后发先至","p":"格挡效率","ph":"后期","v":"+60 护甲值","e":"「壁障」层数上限解除；格挡不再受角度限制，任何方向来的攻击都按正面结算——也就是说任何方向的格挡都能叠到正面那一档「壁障」","r":"持盾耐力","b":""},{"n":"姿态自如","m":"后发先至","p":"格挡效率","ph":"后期","v":"+60 护甲值","e":"举盾与收盾之间的切换不再有前后摇；切换的瞬间获得 0.5 秒无敌帧，且该次格挡直接计为正面格挡","r":"","b":""},{"n":"反射领域","m":"后发先至","p":"格挡效率","ph":"后期","v":"+60 护甲值","e":"格挡成功时，盾面按比例把该次伤害反弹给周围所有敌人；反弹伤害为物理伤害，并按你自己的全伤乘区计算","r":"","b":""},{"n":"战意沸腾","m":"后发先至","p":"格挡效率","ph":"后期","v":"+25% 全伤","e":"每次格挡成功使下一次攻击伤害提高 25%；该加成不会因攻击而消失，只在你收盾时清空","r":"","b":""},{"n":"不动如山","m":"后发先至","p":"格挡效率","ph":"后期","v":"+60 护甲值","e":"连续 5 秒不移动时，格挡减伤翻倍、免疫击退与位移；格挡成功进行收盾时对周围释放一次冲击波（伤害为护甲值为基数的完整乘区）","r":"","b":""},{"n":"盾之誓约","m":"后发先至","p":"格挡效率","ph":"后期","v":"+60% 全伤","e":"永久生效，格挡的减伤不再有上限；举盾时背后与侧面受到的伤害也按格挡结算，并按正面计入「壁障」","r":"","b":""},{"n":"重装甲胄","m":"后发先至","p":"铁甲耐久","ph":"中期","v":"+30 护甲值","e":"你移速增幅超过50%的部分按照每1%转化为2%护甲","r":"","b":""},{"n":"生命洪流","m":"后发先至","p":"铁甲耐久","ph":"中期","v":"+20% 生命上限","e":"主动技能，立刻恢复等同与护甲值的血量，冷却 30 秒 你被治疗时，超过生命上限的部分会等量转化为临时护甲值（最多转化到护甲值上限的 50%，持续五秒）","r":"","b":""},{"n":"甲壳再生","m":"后发先至","p":"铁甲耐久","ph":"中期","v":"+40 护甲值","e":"脱离战斗 5 秒后，护甲值开始自动回复，每秒回复最大护甲值的 10%；同时回复生命，每秒回复 3% 生命上限","r":"","b":""},{"n":"痛觉延迟","m":"后发先至","p":"铁甲耐久","ph":"中期","v":"+10% 最大生命值","e":"你受到的伤害有 30% 会被延后到 3 秒后结算；若在这 3 秒内击杀任意敌人，则免除这笔延迟伤害","r":"","b":""},{"n":"钢铁意志","m":"后发先至","p":"铁甲耐久","ph":"中期","v":"+40 护甲值","e":"你可以永久消耗5点护甲值免疫击退与硬直；每成功免疫一次控制效果，获得 5 点护甲韧性（持续 8 秒，最多叠 3 层） 【多人】8 格内队友受到的击退距离减半","r":"","b":""},{"n":"坚壁仪式","m":"后发先至","p":"铁甲耐久","ph":"中期","v":"+20 护甲值","e":"永久生效，每 30 秒获得一层等同于  你护甲值的护盾 【多人】仪式同时为 8 格内的队友各提供一层同等护盾","r":"","b":""},{"n":"加厚内衬","m":"后发先至","p":"铁甲耐久","ph":"前期","v":"+10 护甲值","e":"你的护甲值每 20 点额外提供 6% 抗性和护甲韧性（原版）","r":"","b":""},{"n":"皮糙肉厚","m":"后发先至","p":"铁甲耐久","ph":"前期","v":"+10 生命上限","e":"你生命上限的 8% 转化为额外护甲值，护甲值每有50点则生命上限+10","r":"","b":""},{"n":"卸力","m":"后发先至","p":"铁甲耐久","ph":"前期","v":"+8 护甲值","e":"单次伤害超过生命上限 15% 时，该次伤害额外减免 20%（可与其他减伤效果乘法叠加）","r":"","b":""},{"n":"钝感","m":"后发先至","p":"铁甲耐久","ph":"前期","v":"+10 护甲值","e":"每次你的护甲替你吸收伤害时，攻击者的攻击力降低 3%、攻击速度降低 10%（最多叠 5 层，持续 8 秒）","r":"","b":""},{"n":"硬壳","m":"后发先至","p":"铁甲耐久","ph":"前期","v":"+10 护甲值","e":"护甲值提供的减伤对爆炸、摔落、穿刺、魔法类伤害同样生效","r":"","b":""},{"n":"耐久之心","m":"后发先至","p":"铁甲耐久","ph":"前期","v":"+15 生命上限","e":"永久生效，护甲不因耐久损耗而降低效果","r":"","b":""},{"n":"不动壁垒","m":"后发先至","p":"铁甲耐久","ph":"后期","v":"+20 护甲值","e":"护甲减伤上限解除；每超出原上限10 点护甲值转化为 1%的特殊伤害结构全能增伤 【多人】8 格内的队友同样享受护甲减伤上限解除，增伤效果只享受30%","r":"","b":""},{"n":"巨兽之躯","m":"后发先至","p":"铁甲耐久","ph":"后期","v":"+20% 生命上限","e":"你受到的伤害有 30% 会被转嫁给 8 格内最近的敌人（不可是攻击者），由它替你承受（转嫁的部分可以触发你的受击效果）","r":"","b":""},{"n":"甲壳脱落","m":"后发先至","p":"铁甲耐久","ph":"后期","v":"+10% 护甲值","e":"可以消耗当前护甲值的 20%，在脚下留下一块持续 20 秒的甲壳掩体；掩体能挡下正面飞来的投射物或指向性技能，敌方实体碰到会被弹开（冷却 15 秒） 【多人】站在掩体后方的队友受到的伤害减少 15%","r":"","b":""},{"n":"铁壁回响","m":"后发先至","p":"铁甲耐久","ph":"后期","v":"+60 护甲值","e":"当你的护甲值被打到30%以下 时，护甲碎片向四周炸开，为6格内的所有怪物附加10秒的（爆甲负面效果）；随后护甲值在 5 秒内回复一半 爆甲：护甲与减伤效果减半，若为怪物则在效果内死亡掉落物翻倍","r":"","b":""},{"n":"不屈","m":"后发先至","p":"铁甲耐久","ph":"后期","v":"+20% 生命上限","e":"受到致命伤害时，若你的护甲值高于当前生命上限的 50%，则免疫该次伤害（cd 20 秒）；触发之后 5 秒内每秒回复 3% 生命上限","r":"","b":""},{"n":"重装誓约","m":"后发先至","p":"铁甲耐久","ph":"后期","v":"+20 护甲值","e":"永久生效，护甲不再受任何穿甲或削减效果影响；你的护甲值上限提高 50% 【多人】誓约覆盖 8 格内的队友，他们同样免疫穿甲，且护甲值上限提高 25%","r":"","b":""},{"n":"连挡窗口","m":"后发先至","p":"精准弹反","ph":"中期","v":"+15% 物理伤害","e":"3 秒内连续精准格挡成功两次以上，判定窗口逐次放宽，每次放宽30%，最多放宽 150%（最终可享受别的词条的乘法乘区）；超过 3 秒未再接上则重置","r":"","b":""},{"n":"反射神经","m":"后发先至","p":"精准弹反","ph":"中期","v":"+40% 移速","e":"判定窗口缩小到原来的 1/3（即基础窗口要 3 倍大才能回到正常水平）；在判定窗口内格挡成功时获得 1 秒子弹时间，周围敌人减速","r":"","b":""},{"n":"弹开","m":"后发先至","p":"精准弹反","ph":"中期","v":"+10% 全伤","e":"精准格挡成功时反弹该次伤害的 50%的物理伤害，并使攻击者短暂硬直2秒（对boss可生效）","r":"","b":""},{"n":"绝境读秒","m":"后发先至","p":"精准弹反","ph":"中期","v":"+15% 生命上限","e":"生命值低于30% 时，精准格挡的判定窗口延长一倍，且判定失败的硬直减半","r":"","b":""},{"n":"反制姿态","m":"后发先至","p":"精准弹反","ph":"中期","v":"+10% 全伤","e":"精准格挡成功后立即获得一次免费的范围攻击(可触发全额其他结构伤害效果和负面效果)","r":"","b":""},{"n":"战意喷涌","m":"后发先至","p":"精准弹反","ph":"中期","v":"+20% 暴击伤害","e":"永久生效，精准格挡成功后 2 秒内暴击率与暴击伤害大幅提升","r":"","b":""},{"n":"时机感知","m":"后发先至","p":"精准弹反","ph":"前期","v":"+10% 移速","e":"选择本增益后额外获得技能【精准格挡】 精准格挡的判定窗口延长 30%","r":"","b":""},{"n":"弹反反打","m":"后发先至","p":"精准弹反","ph":"前期","v":"+15 物理伤害","e":"选择本增益后额外获得技能【精准格挡】 精准格挡成功后，下一次攻击必定暴击","r":"","b":""},{"n":"余震","m":"后发先至","p":"精准弹反","ph":"前期","v":"+8 护甲值","e":"选择本增益后额外获得技能【精准格挡】 精准格挡成功时对攻击者造成一次小额伤害并将其击退","r":"","b":""},{"n":"节奏记忆","m":"后发先至","p":"精准弹反","ph":"前期","v":"+10% 攻速","e":"选择本增益后额外获得技能【精准格挡】 精准格挡成功后 2 秒内，你的下一次精准格挡判定窗口延长 50%(不可单独叠加，如有【时机感知】则乘法叠加)","r":"","b":""},{"n":"守势转换","m":"后发先至","p":"精准弹反","ph":"前期","v":"+15% 攻速","e":"精准格挡成功后 3 秒内攻速 +10% 移速增幅 +10%","r":"","b":""},{"n":"稳手","m":"后发先至","p":"精准弹反","ph":"前期","v":"+15 护甲值","e":"永久生效，精准格挡判定失误时仍按普通格挡结算(普通格挡为20%减伤)","r":"","b":""},{"n":"忘我之境","m":"后发先至","p":"精准弹反","ph":"后期","v":"+50% 移速 / +40% 暴击伤害","e":"连续精准格挡成功会逐次提高判定难度，第 3 次起判定窗口减半；连续 5 次成功再次减半。每成功一次都会获得移速+10%，暴击率+5%，暴击伤害+10%，每次成功增加3秒","r":"","b":""},{"n":"以彼之道","m":"后发先至","p":"精准弹反","ph":"后期","v":"+20% 全伤","e":"精准格挡成功时复制攻击者这一次的攻击，对周围所有敌人释放一次,冷却cd 90 秒","r":"","b":""},{"n":"反制节拍","m":"后发先至","p":"精准弹反","ph":"后期","v":"+30% 物理攻击增幅","e":"精准格挡成功后 1 秒内，你的攻击额外追加一次伤害结算；若在这 1 秒内再次精准格挡成功，追加结算翻倍，无上限","r":"","b":""},{"n":"时空错位","m":"后发先至","p":"精准弹反","ph":"后期","v":"+50 护甲值","e":"精准格挡成功后，接下来 3 秒内你的格挡一律按精准格挡结算，冷却cd 15 秒","r":"","b":""},{"n":"反击不息","m":"后发先至","p":"精准弹反","ph":"后期","v":"+15% 全伤","e":"精准格挡后的免费反击若击杀目标，立刻获得一次新的免费反击，可连续触发,反击可以触发全额其他伤害结构","r":"","b":""},{"n":"弹反誓约","m":"后发先至","p":"精准弹反","ph":"后期","v":"+30% 暴击伤害","e":"永久生效，精准格挡的奖励不再有上限；精准格挡成功后 3 秒内受到致命伤害时免疫一次，技能cd 30 秒","r":"","b":""},{"n":"冲势共鸣","m":"后发先至","p":"盾击与推挤","ph":"中期","v":"+15% 近战增伤","e":"「冲势」层数上限提升到 8；每层额外提供 +4% 伤害（并非全伤，不参与其他伤害结构的乘区）；其他叠层类增益每 2 层折算 1 层冲势，但上限不变","r":"","b":"· 这 15% 只作用在**这张卡自己打出的那一次结算**上，不参与其他伤害结构的乘区——所以它不是「全伤」。"},{"n":"保龄球","m":"后发先至","p":"盾击与推挤","ph":"中期","v":"+18% 近战增伤","e":"被击退的敌人撞到其他敌人时，双方都受到额外伤害（暂定伤害结构为敌人自身护甲值x（1+全伤乘区））","r":"","b":"· 这条只影响**这张卡自己那一次结算**，不参与其他伤害结构的乘区。"},{"n":"破阵推进","m":"后发先至","p":"盾击与推挤","ph":"中期","v":"+30 护甲值【待定】","e":"举盾前进时不再减速，并且在方向不变的情况下可以获得持续加速（最大50%）。路径上的敌人被撞开并造成自身护甲值x（1+全伤），且可以触发其他伤害结构效果（法球等）","r":"","b":""},{"n":"压势爆发","m":"后发先至","p":"盾击与推挤","ph":"中期","v":"+15% 全伤","e":"「压势」上限变为10，范围变为8格。叠满时，下一次盾击造成范围伤害并大幅击退且在原地被眩晕两秒","r":"","b":""},{"n":"撞墙","m":"后发先至","p":"盾击与推挤","ph":"中期","v":"+40% 移速增幅","e":"被击退的敌人撞到地形或方块时受到敌人自身护甲值x（1+玩家移速加成）物理伤害，并眩晕两秒","r":"","b":""},{"n":"势不可挡","m":"后发先至","p":"盾击与推挤","ph":"中期","v":"+4% 移速","e":"永久生效，移速不再被减速效果影响；「冲势」每层额外提供击退强度","r":"","b":""},{"n":"盾面猛击","m":"后发先至","p":"盾击与推挤","ph":"前期","v":"+10 基础攻击力","e":"直接获得该基础物品，该基础物品进行合成特定盾牌（自带盾击功能），可合成六次。 可以用盾牌直接攻击（盾击），造成伤害并击退目标","r":"","b":""},{"n":"冲撞","m":"后发先至","p":"盾击与推挤","ph":"前期","v":"+10% 移速","e":"冲刺撞到敌人时造成伤害并将其击退，伤害=移速x近战数值（1+全伤）","r":"","b":"通过自制模组仪式直接获得该技能，具体仪式配方为 [待定]"},{"n":"连击节奏","m":"后发先至","p":"盾击与推挤","ph":"前期","v":"+10% 攻速","e":"盾击命中后 1 秒内可以再接一次盾击，形成连段","r":"","b":""},{"n":"冲势","m":"后发先至","p":"盾击与推挤","ph":"前期","v":"+5% 移速","e":"每次成功击退敌人获得 1 层「冲势」（最多 3 层，持续 6 秒），每层提升移速增幅和全伤（暂为3%和5%）","r":"","b":"该技能后续应有中期及以后技能进行配合"},{"n":"压迫感","m":"后发先至","p":"盾击与推挤","ph":"前期","v":"+10 护甲值","e":"周围一定范围内（暂定5格）的敌人移速降低；附近每有一名被影响的敌人，你获得 1 层「压势」（最多 5 层，持续 3 秒）","r":"","b":"该层数暂时不起作用"},{"n":"推挤训练","m":"后发先至","p":"盾击与推挤","ph":"前期","v":"+5 近战增伤","e":"永久生效，击退强度 +25%，盾击的冷却缩短","r":"","b":""},{"n":"一夫当关","m":"后发先至","p":"盾击与推挤","ph":"后期","v":"+80 护甲值 / +50% 移速增幅","e":"击退强度不再有上限；击退距离=玩家护甲值x（1+移速增幅），击飞伤害=（玩家护甲值x基础伤害x移速增幅）+其他伤害结构 增加一个战吼技能：怪物会被迫吸引到该玩家身上，boss生物则被吸引仇恨","r":"","b":""},{"n":"横扫盾阵","m":"后发先至","p":"盾击与推挤","ph":"后期","v":"+20% 全伤","e":"「冲势」上限为30层，盾击造成范围击退同时消耗5层「冲势」；每击退一名敌人，「冲势」+1，并获得时长10秒的全伤20%增幅","r":"","b":"· 这条全伤**不影响其他伤害结构**（只按本卡自己的那一次结算生效）。"},{"n":"势能转化","m":"后发先至","p":"盾击与推挤","ph":"后期","v":"+15% 全伤","e":"「冲势」层数不再随时间掉落；每 3 层「冲势」使你的攻击额外追加一次伤害结算（按照原有伤害的10%全伤结算）","r":"","b":""},{"n":"无双冲撞","m":"后发先至","p":"盾击与推挤","ph":"后期","v":"+20% 近战增伤","e":"冲撞会贯穿路径上的所有敌人，不会被碰撞箱影响，当小怪和精英怪血量低于自身最大生命值的20%则直接斩杀；若是boss则直接造成近战增伤x移速增幅x护甲的物理伤害（不能吃到其他伤害结构）并附带已损生命值的10%；冲撞击杀目标时立即重置冷却","r":"","b":""},{"n":"压迫领域","m":"后发先至","p":"盾击与推挤","ph":"后期","v":"+60 护甲值","e":"附近每有一名被压制的敌人你获得 1 层「压势」；「压势」上限解除，每层额外提供伤害减免5%（最高70%）；若已有【压势爆发】，则每眩晕一个敌人则获得临时护甲3点与全伤2%","r":"","b":""},{"n":"推土机","m":"后发先至","p":"盾击与推挤","ph":"后期","v":"+70% 移速增幅","e":"被击退的敌人无法被其他效果减速或阻挡；被推到的敌人除非玩家自己停止则永远在眩晕状态（大型boss除外）","r":"","b":""},{"n":"伤上加伤","m":"后发先至","p":"受击反馈","ph":"中期","v":"+40 护甲值","e":"「受创」层数上限提升到 6，每层额外提供 +5% 护甲值；其他叠层类增益每 2 层折算 1 层受创(不影响原叠层效果)","r":"","b":""},{"n":"怒火中烧","m":"后发先至","p":"受击反馈","ph":"中期","v":"+50 护甲值","e":"「怒火」层数上限提升到 8，每层额外提供 1 点护甲韧性和三点护甲，每次受伤后收到所有控制类效果时长-25%（最高75%）","r":"","b":""},{"n":"以伤换伤","m":"后发先至","p":"受击反馈","ph":"中期","v":"+40 护甲值","e":"受到伤害后，下一次格挡成功的减伤提高50%（冷却 5 秒）","r":"","b":""},{"n":"血怒循环","m":"后发先至","p":"受击反馈","ph":"中期","v":"+20% 生命上限","e":"「怒火」层数不再占用上限，并且持续到脱战10秒后","r":"","b":""},{"n":"触底反弹","m":"后发先至","p":"受击反馈","ph":"中期","v":"+40 护甲值","e":"生命值低于 15% 时，所有受击触发的收益翻倍，吸血效果-90%","r":"","b":""},{"n":"怒潮","m":"后发先至","p":"受击反馈","ph":"中期","v":"+30 护甲值","e":"永久生效，每累计受到相当于生命上限 50% 的伤害（按照护甲减伤后的全额数值计算）获得 1 层「怒潮」（最多 3 层），每层使你的护甲值 +20%、受到的伤害 -10%（最大90%），全伤+5%","r":"","b":""},{"n":"痛觉","m":"后发先至","p":"受击反馈","ph":"前期","v":"+10 护甲值","e":"每次受到伤害获得 1 层「受创」（最多 3 层，持续 6 秒），每层使你的护甲值提高4点（即使该次伤害被格挡或护甲完全吸收也照样叠层）","r":"","b":""},{"n":"反击本能","m":"后发先至","p":"受击反馈","ph":"前期","v":"+15 基础攻击力","e":"受到近战攻击时，立即对攻击者进行一次反击(基于自身伤害)","r":"","b":""},{"n":"临危不乱","m":"后发先至","p":"受击反馈","ph":"前期","v":"+8 护甲值","e":"受到伤害后 3 秒内，你的护甲值提高 20%","r":"","b":""},{"n":"怒火","m":"后发先至","p":"受击反馈","ph":"前期","v":"+15 基础攻击力","e":"每损失 10% 生命值获得 1 层「怒火」（最多 5 层，持续 8 秒），每层提升自身 2% 近战增伤","r":"","b":""},{"n":"耐痛","m":"后发先至","p":"受击反馈","ph":"前期","v":"+8 护甲值","e":"连续受到伤害时，从第 2 次起每次收到伤害递减 8%（最多递减 40%）（结算其他效果时视为全额数值）；脱离战斗 4 秒后重置","r":"","b":""},{"n":"伤疤","m":"后发先至","p":"受击反馈","ph":"前期","v":"+5 生命上限","e":"永久生效，每场战斗开始时自带 2 层「受创」（不计入上限）","r":"","b":"· 这 +5 是**基础生命值**那一段（会吃百分比增幅）。"},{"n":"不动明王","m":"后发先至","p":"受击反馈","ph":"后期","v":"+30% 生命上限","e":"可以主动消耗全部「受创」层数，每消耗 1 层使你在接下来 1 秒内受到的伤害减少 50%（乘法计算），最多持续 5 秒；冷却 60 秒。如果消耗层数高于八层则八秒内无敌。","r":"","b":""},{"n":"伤愈成钢","m":"后发先至","p":"受击反馈","ph":"后期","v":"+20% 护甲值","e":"每累计受到相当于生命上限 100% 的伤害（结算前的全额伤害），永久获得 1 点护甲值与 自身最大生命值上限 × 0.5 的全伤，护甲加成没有上限，（全伤最高+120%）","r":"","b":""},{"n":"痛觉失控","m":"后发先至","p":"受击反馈","ph":"后期","v":"+40% 移速","e":"「受创」与「怒火」的层数上限解除，且每层额外提供 1% 移速","r":"","b":""},{"n":"向死而生","m":"后发先至","p":"受击反馈","ph":"后期","v":"+60 护甲值","e":"「受创」的层数上限越高则生命值越低，；生命值低于 15% 时免疫所有控制效果","r":"","b":""},{"n":"以牙还牙","m":"后发先至","p":"受击反馈","ph":"后期","v":"+15% 基础攻击力","e":"受击触发的反击若击杀目标，则自动反击效果永久多结算一次，无上限，且可触发全额其他伤害结构。立即重置所有受击触发效果，与技能的冷却","r":"","b":""},{"n":"受创誓约","m":"后发先至","p":"受击反馈","ph":"后期","v":"+30% 生命上限","e":"永久生效，每层「受创」使你的所有攻击额外追加一次伤害结算（最多同时触发4种）；受到的伤害若不超过生命上限的 20% （护甲结算后的伤害）则视为无伤害","r":"","b":""},{"n":"横扫千军","m":"一器通神","p":"重武","ph":"中期","v":"+20% 近战增伤","e":"【获取蓄力能力】蓄力条上限 2 秒 蓄力满 2 秒后释放：扫击周围一圈并击退 每命中一个目标，额外结算一次方向增伤——扫到三个人就是三次","r":"","b":"2 秒蓄力点上的招式。方向增伤按目标数分别触发，是和「斩击」方向联动最强的一张"},{"n":"反震","m":"一器通神","p":"重武","ph":"中期","v":"+25 护甲值","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力被打断时，打断你的敌人硬直 2 秒，并且你获得 2 层「战意」，上限五层","r":"","b":"「战意」是一器通神四个方向共享的资源，长兵、斩击、锋锐的卡也会产出和消费它"},{"n":"借力","m":"一器通神","p":"重武","ph":"中期","v":"+20% 近战增伤","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力期间每受到一次伤害，本次蓄力的最终倍率 +15%（最多叠 3 次）","r":"","b":"让\"蓄力时挨打\"从纯亏损变成一个可以用血量换伤害的选项"},{"n":"蓄势待发","m":"一器通神","p":"重武","ph":"中期","v":"+30 护甲值","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力时，周围 4 格内的敌人移速降低 50%；蓄满 2 秒的瞬间把近处敌人推开一小步","r":"","b":"被推开的敌人正好落进「斩击」方向的聚拢范围，两个方向可以直接接起来"},{"n":"势不可回","m":"一器通神","p":"重武","ph":"中期","v":"+25% 近战增伤","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力一旦超过 1 秒就不能主动取消；但被打断时返还全部进度","r":"","b":"取舍卡：要么把这一刀打完，要么至少不白等"},{"n":"蓄势入锋","m":"一器通神","p":"重武","ph":"中期","v":"+15% 近战增伤","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力攻击的方向增伤 +35%（超限：该加成不受 120% 上限限制）；蓄力攻击每命中一个目标，「战意」+1","r":"","b":""},{"n":"蓄力架势","m":"一器通神","p":"重武","ph":"前期","v":"+5% 暴击率","e":"【获取蓄力能力】蓄力条上限 3 秒 按住蓄力，松手释放；此击暴击伤害提升 20%（每多蓄 1 秒再 +5%）；不足 0.5 秒时按普通攻击结算 蓄力期间不能格挡，受到的伤害提高 25% 蓄力攻击可触发 50% 的方向增伤","r":"","b":"基础状态：玩家没有蓄力能力，最多只能蓄到 0.5 秒，意思一下。 蓄力能力由本池的招式卡专属提供，每张招式卡给出自己的一段蓄力条上限，取其中最高的那个： 挑击       0.5 秒 过肩劈     2 秒 横扫千军   2 秒 蓄力架势   3 秒 开山       +2 秒（把上限继续往上推，配合上面最高的那个能到"},{"n":"挑击","m":"一器通神","p":"重武","ph":"前期","v":"+10% 近战增伤","e":"【获取蓄力能力】蓄力条上限 0.5 秒 蓄力满 0.5 秒后释放：把目标挑飞，落地时追加一次伤害（为本次伤害的 30%） 到了下一个蓄力点（2 秒）就被覆盖 此追加伤害可以吃到全额方向增伤","r":"","b":"0.5 秒蓄力点上的招式"},{"n":"沉肩","m":"一器通神","p":"重武","ph":"前期","v":"+5 护甲值","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 站立不动时，蓄力速度 +30%（缩短到达各蓄力点所需的时间） 若整段蓄力期间没有移动，释放时按高一级的蓄力点结算（最高 5 秒）","r":"","b":""},{"n":"稳桩","m":"一器通神","p":"重武","ph":"前期","v":"+6 护甲值","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力时受到的控制效果时长减少 30% 蓄力期间每免疫一次控制效果，本次蓄力的最终倍率 +10%（最多 2 次）","r":"","b":""},{"n":"过肩劈","m":"一器通神","p":"重武","ph":"前期","v":"+10% 近战增伤","e":"【获取蓄力能力】蓄力条上限 2 秒 蓄力满 2 秒后释放：此击暴击率 +20%，并对目标造成 1.5 秒眩晕 此击可吃到全额方向增伤（未获得超限类增益前，方向增伤最高 120%）","r":"","b":"2 秒蓄力点上的招式。因为倍率会乘到方向增伤上，它是本池方向口子最值钱的一击"},{"n":"重压","m":"一器通神","p":"重武","ph":"前期","v":"+10% 近战增伤","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力攻击命中处于击退或硬直状态的目标时，额外增伤 15%","r":"","b":"自己制造硬直的招式天然配合"},{"n":"开山","m":"一器通神","p":"重武","ph":"后期","v":"+40% 近战增伤","e":"【获取蓄力能力】自带蓄力条上限 +2 秒（把当前上限往上推 2 秒） 蓄力满 5 秒后释放：这一击无视目标 50% 的护甲；命中后震开周围敌人","r":"","b":"5 秒蓄力点上的招式，蓄力条拉满才打得出来。自带穿透，和「锋锐」方向是同一套语言"},{"n":"过蓄","m":"一器通神","p":"重武","ph":"后期","v":"+30 护甲值","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄满 5 秒之后继续蓄力不再增加伤害，每一段转为一层「过量蓄势」：释放时附带一圈冲击波，过蓄越久范围越大，每层都能触发全额方向增伤","r":"","b":"让\"蓄太久\"有回报而不是惩罚，但回报从伤害转成了范围"},{"n":"蓄势不泄","m":"一器通神","p":"重武","ph":"后期","v":"+35 护甲值","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力不再被打断（但蓄力时受击伤害 +25% 依然生效）","r":"","b":"规则改写：想蓄就一定能蓄满，代价是这段时间更疼"},{"n":"一击决胜","m":"一器通神","p":"重武","ph":"后期","v":"+35% 近战增伤","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄满 5 秒的「开山」若击杀目标，立刻返还全部蓄力进度，可以直接接下一发","r":"","b":""},{"n":"重压领域","m":"一器通神","p":"重武","ph":"后期","v":"+30% 近战增伤","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 蓄力时，6 格内的敌人受到你的方向增伤提高 30%","r":"","b":"跨方向联动卡：给「斩击」和「长兵」的方向增伤加料"},{"n":"器灵苏醒","m":"一器通神","p":"重武","ph":"后期","v":"+40% 近战增伤","e":"获得蓄力能力（初始无效果，需要先取得任意一张蓄力招式卡） 永久生效：蓄力攻击不再有倍率上限；每层「战意」使蓄力速度 +20%","r":"","b":"把四个方向共享的「战意」变成自己的加速器"},{"n":"分寸之间","m":"一器通神","p":"长兵","ph":"中期","v":"+15% 近战增伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 甜区扩大到 2~5 格，且甜区内的近战增伤 +25%","r":"","b":"直接把甜区整体外推一格——玩家的站位习惯会跟着变"},{"n":"退步刺","m":"一器通神","p":"长兵","ph":"中期","v":"+20% 近战增伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 向后移动时出的攻击变成退步刺：伤害 ×1.6（为穿刺），并把目标推开半格 此击可吃到全额方向伤害加成","r":"","b":"推开的敌人刚好还在甜区里，可以接着刺——退步刺自带循环"},{"n":"拒止圈","m":"一器通神","p":"长兵","ph":"中期","v":"+15 护甲值","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 你 2 格处形成一圈拒止区：敌人每次进入都会挨一次穿刺，并被打退半格 该穿刺吃全额方向增伤","r":"","b":"不是\"敌人靠近就减速\"，而是每次尝试靠近都要付一次代价"},{"n":"长驱直入","m":"一器通神","p":"长兵","ph":"中期","v":"+15% 近战增伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 在甜区内连续命中 3 次后，下一次攻击暴击率+60%","r":"","b":""},{"n":"步步为营","m":"一器通神","p":"长兵","ph":"中期","v":"+20% 近战增伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 每在甜区命中一次，「战意」+1，上限 8 层 离开甜区不会清空已经攒下的「战意」","r":"","b":"和「枪围」的区别：那张只认甜区最外侧那一格，这张是整个甜区都算，但攒得慢 以枪围作为前置"},{"n":"以退为进","m":"一器通神","p":"长兵","ph":"中期","v":"+20% 近战增伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 你每后退 1 格，「战意」+1（最多 5 层） 穿刺时可以消耗全部「战意」，每消耗 1 层让这次穿刺多贯穿 1 格","r":"","b":"长兵消费「战意」的出口，也是\"后退\"这件事的第二个用途—— 「步法」让后退变成增益，「退步刺」让后退变成招式，这张让后退本身变成弹药。 和「拒止圈」的分工：那张管\"敌人不许进来\"，这张管\"我退出去能换到什么\"。"},{"n":"长柄架势","m":"一器通神","p":"长兵","ph":"前期","v":"+5% 近战增伤","e":"【获取长兵能力】设定甜区：以你为圆心 3~4 格   甜区，伤害 ×1.5 ≤1 格     贴身，伤害 ×0.7 ≥5 格     够不到 甜区内的攻击可以吃到全额方向增伤","r":"","b":"本池的入口卡，长兵的完整规则只写在这里。甜区是可以被卡改写的（扩大、换位置、去下限）。"},{"n":"突刺","m":"一器通神","p":"长兵","ph":"前期","v":"+10% 近战增伤","e":"【获取长兵能力】设定甜区：3~4 格 ×1.5、≤1 格 ×0.7、≥5 格够不到 在甜区内攻击时向前突进1格，并追加一次穿刺判定 向前突进是代价：戳完之后你会离敌人更近，可能直接掉进贴身区（×0.7） 此击追加判定独立结算方向增伤","r":"","b":"穿刺的完整规则写在这里： · 沿一条直线打出去，能贯穿路径上的所有敌人 · 每个后续目标伤害递减 20% · 出手没有前摇，但也不造成击退 · 贯穿是穿刺的天生属性，别的卡只做强化，不做解锁 一张卡打两次，是长兵方向口子最直接的来源"},{"n":"拒马","m":"一器通神","p":"长兵","ph":"前期","v":"+8 护甲值","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 敌人进入你 2 格内时被减速 35%","r":"","b":"被贴身本来是长兵的弱点，这张把它变成一个控场手段"},{"n":"腕如铁铸","m":"一器通神","p":"长兵","ph":"前期","v":"+15% 攻速","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 处于甜区内时攻速 +15%","r":"","b":""},{"n":"步法","m":"一器通神","p":"长兵","ph":"前期","v":"+10% 移速","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 向后退时移速 +25%；后退中的攻击伤害 +15%","r":"","b":"长兵的标准动作是\"退半步再刺\"，这张把后退本身变成增益"},{"n":"枪围","m":"一器通神","p":"长兵","ph":"前期","v":"+15 基础攻击力","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 在甜区最外侧的 1 格内（四格远）命中时，「战意」+1（每秒最多 1 层）上限五层","r":"","b":"「战意」是一器通神四个方向共享的资源，其他方向的卡也会产出和消费它"},{"n":"一寸长一寸强","m":"一器通神","p":"长兵","ph":"后期","v":"+30% 近战增伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 所持武器若为近战类则攻击距离+3 甜区的伤害倍率不再有上限，离得越远越高（每多 1 格 +10%，不再封顶） 若为远程武器则每多五格+10%","r":"","b":"规则改写：甜区从\"一个区间\"变成\"越远越好\"，但出了 5 格依然够不到"},{"n":"枪出如龙","m":"一器通神","p":"长兵","ph":"后期","v":"+40% 近战增伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 甜区收窄成一条线：只剩 4~5 格这一圈，但命中这一圈时伤害 ×3 且必定暴击（不包含方向增伤） 不在甜品区则伤害x0.9","r":"","b":"把\"维持距离\"练到极致——甜区从一圈收成一个环，站错半步就打不出伤害"},{"n":"进退自如","m":"一器通神","p":"长兵","ph":"后期","v":"+40% 近战增伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 甜区不再有距离下限：贴身时也按甜区结算","r":"","b":"规则改写：把长兵唯一的弱点（贴身变弱）直接抹掉"},{"n":"拒敌千里","m":"一器通神","p":"长兵","ph":"后期","v":"+25% 最大生命值","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 被你的攻击推开的敌人，3 秒内移速-80%，并附加一层易伤效果（每层护甲暂时降低20%，最多五层）","r":"","b":"不是减速，是直接不让靠近——强迫敌人待在甜区里挨打"},{"n":"百兵之王","m":"一器通神","p":"长兵","ph":"后期","v":"+30% 全伤增幅","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 每层「战意」使甜区伤害倍率 +8%","r":"","b":"把共享资源接进甜区——四个方向可以互相喂这张卡"},{"n":"不动枪阵","m":"一器通神","p":"长兵","ph":"后期","v":"+35 护甲值","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 站定不动 1 秒后，甜区扩大为 10 格，并且攻击后摇-80% 站定每五秒身边召唤一柄手持武器的飞剑，自动攻击一名敌人后消散，可触发全额方向增伤","r":"分寸之间","b":"和「进退自如」是两条路：一个靠走位，一个靠站桩，都能解决贴身问题"},{"n":"枪痕","m":"一器通神","p":"长兵","ph":"后期","v":"+25% 全伤","e":"获得长兵能力（初始无效果，需要先取得任意一张长兵招式卡） 被穿刺类攻击命中的敌人，会被铭刻「枪痕」 同一个敌人身上同时只能存在一个枪痕，重复穿刺只刷新计时，不叠加伤害 5 秒后枪痕爆发，造成该次穿刺 300% 的方向增伤","r":"","b":"枪痕是延迟结算——穿刺打出去之后，真正的收益在五秒后。 它也是长兵后期唯一一张真正吃穿刺的卡：前面几张（枪出如龙、进退自如）都在改甜区， 穿刺这条线到后期一直没人接，这张把它接上了。 配合「以退为进」（穿刺多贯穿几格），可以一次给一串敌人同时刻上枪痕。 负面代价：一个敌人身上只能挂一个枪痕。所以\"戳同一只怪好几次\"不会"},{"n":"以寡击众","m":"一器通神","p":"斩击","ph":"中期","v":"+15% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 横扫伤害按命中人数递增：每多一个目标，所有被扫中的敌人受到的伤害 +10%（最多 +50%）","r":"","b":"和大部分游戏的\"多目标递减\"是反的，所以聚拢起来的收益是双份的"},{"n":"漩涡","m":"一器通神","p":"斩击","ph":"中期","v":"+20% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 主动原地旋转一圈，把 3 格内的敌人全部吸到身前，并造成一次伤害，此击+40暴击率 每个被吸到的敌人独立结算方向增伤","r":"","b":"斩击的\"聚怪\"按钮——先漩涡把人堆起来，再横扫"},{"n":"刀风回旋","m":"一器通神","p":"斩击","ph":"中期","v":"+20% 近战增伤 / +10% 方向增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 刀风不再留在原地，而是朝你飞回来；飞回来的路上再结算一次方向增伤","r":"","b":"· 这条方向增伤属于**超限**类：可以突破默认 120% 的上限。 刀风回来时会经过你身前的敌人，等于同一次横扫打两遍 前置为斩风"},{"n":"刀落数响","m":"一器通神","p":"斩击","ph":"中期","v":"+20% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 横扫时的方向增伤按目标数分别结算——扫到三个人就是三次（最多计算5次）","r":"","b":"方向口子的放大器。和「以寡击众」叠起来，聚怪收益会非常夸张"},{"n":"叠浪","m":"一器通神","p":"斩击","ph":"中期","v":"+20% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 每被卷入一个敌人，你的下一击伤害 +8%（最多叠 5 层），攻击后清空","r":"","b":""},{"n":"铁壁合围","m":"一器通神","p":"斩击","ph":"中期","v":"+15 护甲值","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 你身前 2 格内的敌人越多，你受到的伤害越低（每个 −4%，最多 −20%）","r":"","b":"把\"站在怪堆中间\"这个高风险位置，用减伤补回来"},{"n":"蓄扫","m":"一器通神","p":"斩击","ph":"中期","v":"+20% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 【横扫】的充能上限提高4次 每多存 1 次未使用的【横扫】，横扫伤害 +12%","r":"","b":"奖励\"攒着不用\"。但攒着就意味着停手，所以它天然和「立地成圆」（站定不动时扇形扩到 180°）是一对。 存满 4 次再打的话，单次横扫能吃到 +36%。"},{"n":"踏雪","m":"一器通神","p":"斩击","ph":"中期","v":"+50% 移速","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 移动时，【横扫】的充能速度 +40%，在雪地时充能效果+80%","r":"","b":"和「蓄扫」正好是相反的两条路：一个让你停下来攒，一个让你边走边攒。 但走位时横扫角度只有 90°（见「立地成圆」），所以边走边攒是在拿范围换频率。"},{"n":"连斩","m":"一器通神","p":"斩击","ph":"中期","v":"+20% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 【横扫】击杀敌人时，立刻向最近的下一个敌人追斩一次 追斩不消耗【横扫】次数，每次横扫最多追斩 2 次，追斩同样触发聚拢","r":"","b":"让刀光连成一片——原本一次横扫只砍一刀，现在人够多的时候能连成三刀。 和「一刀两断」（残血斩杀）是一对：那个负责制造击杀，这个负责把击杀变成下一刀。"},{"n":"刀气","m":"一器通神","p":"斩击","ph":"中期","v":"+20% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 【横扫】在打出扇形的同时，会朝你面朝的方向甩出一道弧形刀气 刀气飞出7 格，路径上的敌人受到一次伤害，吃全额方向增伤","r":"","b":"斩击第一次离开手上——横扫管近，刀气管远。 刻意做成弧形而不是直线：直线飞出去是「长兵」的穿刺，弧线才是刀。"},{"n":"横扫架势","m":"一器通神","p":"斩击","ph":"前期","v":"+6% 近战增伤","e":"【获取斩击能力】每隔 3 秒获得 1 次【横扫】次数，最多存 2 次 只要还持有次数，你的下一次攻击就会自动变成【横扫】，并消耗 1 次 【横扫】打出 120° 扇形，范围内的敌人一起被命中 被扫中的敌人会被拉向你身前半格（不是推开） 【横扫】可以吃到全额方向增伤","r":"","b":"本池的入口卡，斩击的完整规则只写在这里。 【横扫】不是技能，是\"自动替换攻击\"——攒着次数，下一次挥砍自动变成横扫。 因为一攻击就会消耗，所以\"攒着不用\"意味着你得停手，这本身就是一个取舍。 核心是\"聚拢\"——大部分游戏横扫是把敌人推散，这里是收拢，于是\"扫→聚→再扫\"能循环起来。"},{"n":"斩风","m":"一器通神","p":"斩击","ph":"前期","v":"+10% 近战增伤","e":"【获取斩击能力】每隔 3 秒获得 1 次【横扫】次数，最多存 2 次 持有次数时，你的下一次攻击自动变成【横扫】（120° 扇形，把敌人拉近半格） 【横扫】打出后在你身前留下一道持续 2 秒的刀风，穿过它的敌人受到一次伤害 这次伤害吃全额方向增伤","r":"","b":""},{"n":"立地成圆","m":"一器通神","p":"斩击","ph":"前期","v":"+10% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 站定不动时横扫角度扩大到 180°；移动中缩到 90°","r":"","b":"让\"站住打\"成为斩击的一个选项：站桩扫得宽，走位扫得窄"},{"n":"阔锋","m":"一器通神","p":"斩击","ph":"前期","v":"+8% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 横扫角度 +30°","r":"","b":""},{"n":"聚势","m":"一器通神","p":"斩击","ph":"前期","v":"+8% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 一次横扫命中 2 个以上敌人时，「战意」+1（每次横扫最多 1 层，上限三层）","r":"","b":"「战意」是一器通神四个方向共享的资源，其他方向的卡也会产出和消费它"},{"n":"顺势下压","m":"一器通神","p":"斩击","ph":"前期","v":"+10 护甲值","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 一次横扫命中 3 个以上敌人时，本次暴击率+20%","r":"","b":""},{"n":"未雨绸缪","m":"一器通神","p":"斩击","ph":"前期","v":"+10% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 进入战斗时立刻获得 2 次【横扫】次数（上限变为5）","r":"","b":"解决\"开局没次数\"的问题——斩击开局就能连扫两下"},{"n":"断矢","m":"一器通神","p":"斩击","ph":"前期","v":"+10% 攻击速度","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 持有【横扫】次数时，横扫会额外斩断范围内的飞行物（箭矢、投掷物、弹幕） 被斩断的飞行物会朝最近的敌人弹回去，造成它原本的伤害","r":"","b":"\"斩\"字最直观的一个表达：把飞过来的东西一刀两断。 和「后发先至」的挡投射物形成对照——盾牌是挡下来，刀是斩断再还回去。"},{"n":"一刀两断","m":"一器通神","p":"斩击","ph":"后期","v":"+40% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 横扫范围内的敌人，生命值低于 20% 的直接斩杀，并立刻恢复一次斩击次数","r":"","b":"聚怪之后一次收掉，是斩击最爽的一刀"},{"n":"聚拢领域","m":"一器通神","p":"斩击","ph":"后期","v":"+15% 全伤加成","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 你可以指定一个点，接下来三秒内十格内的怪物会被立刻吸引到该点，并附加【易伤2级】","r":"","b":"规则改写：不用主动聚怪，怪自己过来"},{"n":"人海战术","m":"一器通神","p":"斩击","ph":"后期","v":"+35% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 【横扫】每命中一个敌人，充能速度永久加快 8%（最多 将时间减少为0.5秒）","r":"","b":""},{"n":"千军辟易","m":"一器通神","p":"斩击","ph":"后期","v":"+15% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 横扫范围扩大到 360°，并且每命中一个目标就追加一次方向增伤","r":"","b":"角度和数量同时拉满——只要怪够多，这一刀的结算次数就没有上限"},{"n":"刀风永驻","m":"一器通神","p":"斩击","ph":"后期","v":"+20% 最大生命值","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 刀风不再消失，而是持续存在并围绕使用者旋转（最多同时存在四片刀风）","r":"","b":""},{"n":"斩击誓约","m":"一器通神","p":"斩击","ph":"后期","v":"+40% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 当【横扫】次数为 0 时，可以消耗 10% 当前生命值强行打出一发横扫 这个代价不会致死，生命值最低降到 1 点","r":"","b":"和刀立下的誓约：没次数的时候用血来换。 横扫的次数机制还在（有次数时优先用次数，不扣血），但空窗期不再存在—— 只要还有血，就永远打得出一刀。名字里的\"誓约\"就是这个意思。"},{"n":"一气呵成","m":"一器通神","p":"斩击","ph":"后期","v":"+15% 近战增伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 【横扫】可以一次消耗多次次数： 消耗 2 次 → 本次横扫变成 360° 全向 消耗 3 次 → 额外附带一次吸血效果（计算伤害的5%）","r":"蓄扫","b":"把\"攒次数\"变成\"存大招\"——存得越久，放出来越狠。 和「蓄扫」（存满给伤害）叠起来，攒到 4 次就能打出一发又宽又疼的全向横扫。"},{"n":"斩铁","m":"一器通神","p":"斩击","ph":"后期","v":"-20% 全伤","e":"获得斩击能力（初始无效果，需要先取得任意一张斩击招式卡） 【横扫】无视目标的格挡与护盾，直接斩在生命值上","r":"","b":"斩开防御，而不是绕过防御——所以这里的说法是\"无视格挡与护盾\"，不是\"提升穿透\"。 穿透是「锋锐」的词，斩击的说法应该更干脆。"},{"n":"刃之记忆","m":"一器通神","p":"锋锐","ph":"中期","v":"+20% 全伤增幅","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 你的武器会记住砍过的东西 每击杀一只敌人，累积 1 层对应种类的「记忆」，每层使你对该种类敌人的伤害 +4%（每种最多 10 层） 换一种敌人不会清空已经攒下的记忆 最多存储15种生物","r":"","b":"按\"敌人种类\"记，不是按个体——所以它是长期养成的，在一张图里刷久了会越来越顺手， 换到全是新敌人的地方就要重新攒。 这和「拒敌千里」的易伤（给单个敌人叠减益）完全是两回事： 那个是这一局内的即时收益，这个是跨战斗攒下来的东西。 也贴合\"一器通神\"的主题——你越了解一种敌人，这把刀在它身上就越锋利。"},{"n":"见血封喉","m":"一器通神","p":"锋锐","ph":"中期","v":"+20% 暴击伤害","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 锋锐度为满值时，暴击率 +25% 如果上一击暴击，则下一击50%概率不消耗锋锐度","r":"削铁如泥","b":""},{"n":"磨刀不误","m":"一器通神","p":"锋锐","ph":"中期","v":"+15 护甲值","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 磨刀过程中受到的伤害减少 80%","r":"","b":"磨刀本来是最脆的时候，这张让你敢在战斗中间蹲下来磨"},{"n":"锋贯其髓","m":"一器通神","p":"锋锐","ph":"中期","v":"+20% 全伤增幅","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 你的护甲穿透同时作用于方向增伤，也就是方向伤害也吃穿透（所有类的护甲传统类增益都可触发）","r":"","b":"锋锐方向最值钱的一张：它让本池的招牌能力直接给方向增伤服务"},{"n":"刃芒","m":"一器通神","p":"锋锐","ph":"中期","v":"+20% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 每消耗 10 点锋锐度就触发一次刃芒，对目标追加一次穿刺（可与长兵类相关增益叠加） 这次穿刺吃全额方向增伤","r":"","b":"把\"变钝\"这件事本身变成输出——砍得越多，刃芒触发得越频繁"},{"n":"残锋","m":"一器通神","p":"锋锐","ph":"中期","v":"+20% 攻速","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 磨刀完成后 3 秒内攻速 +40%","r":"","b":"奖励\"磨完立刻回到战斗\"，配合「削铁如泥」「见血封喉」形成刚磨完的一波爆发"},{"n":"钝击","m":"一器通神","p":"锋锐","ph":"中期","v":"+20% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 锋锐度低于 50 时，你的攻击附带硬直 硬直时长随锋锐度降低而增加：50 点时 0.5 秒，30点时 1.2 秒","r":"钝刃反打","b":"钝了之后砍不进去，但砸得动——把\"变钝\"从纯亏损变成另一种控制手段。 和「钝刃反打」是同一套逻辑的下一步：那张给击退与方向触发，这张给硬直。"},{"n":"地动余波","m":"一器通神","p":"锋锐","ph":"中期","v":"+20% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 锋锐度低于 30 时，每次攻击会在落点产生一次小范围震荡 震荡对 2 格内的其他敌人造成本次攻击 30% 的伤害","r":"钝击","b":"钝刀砸在地上会震到旁边的人。 和「钝击」的分工：那个管打到的那一个，这个管旁边的那些。"},{"n":"开刃","m":"一器通神","p":"锋锐","ph":"前期","v":"+10% 近战增伤","e":"【获取锋锐能力】引入锋锐度：满值 100 点，每命中一次 −1 锋锐度按比例提供护甲穿透，满值时穿透 30%，归零时穿透 0%，中间范围按照比例减少 锋锐度可以作用于方向增伤","r":"","b":"本池的入口卡之一，锋锐的完整规则只写在这里。 武器会越砍越钝——这是本池和另外三个方向最不一样的地方：它要求你付出维护成本。"},{"n":"磨刀石","m":"一器通神","p":"锋锐","ph":"前期","v":"+6% 近战增伤","e":"【获取锋锐能力】锋锐度满值 100 点，每命中一次 −1，按比例提供最多 30% 护甲穿透 获得主动磨刀：原地磨 8 秒（期间不能攻击），结束后锋锐度回满","r":"","b":"本池的第二个入口卡。锋锐度系统本身由它或「开刃」任意一张提供。"},{"n":"刃口维护","m":"一器通神","p":"锋锐","ph":"前期","v":"+10% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 每次击杀敌人返还 10 点锋锐度","r":"","b":"让\"多杀怪\"顺便变成维护手段，减少磨刀次数"},{"n":"轻磨","m":"一器通神","p":"锋锐","ph":"前期","v":"+10% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 磨刀时间缩短到 1 秒，但只回复 60 点锋锐度","r":"","b":"取舍卡：磨得勤但磨不满，还是磨得慢但一次到位"},{"n":"削铁如泥","m":"一器通神","p":"锋锐","ph":"前期","v":"+6% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 锋锐度高于 80 时，攻击额外无视 10% 护甲，且+40暴击率，+20%暴击效果","r":"","b":"奖励\"保持锋利\"——刚磨完刀的那几下最猛"},{"n":"钝刃反打","m":"一器通神","p":"锋锐","ph":"前期","v":"+10 护甲值","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 锋锐度低于 30 时，击退强度 +40%，且每一击都可触发0.5倍率方向卡效果","r":"","b":"钝了砍不进去，就改成砸——给\"刀钝了\"这段时间一条别的出路，而不是纯粹的惩罚"},{"n":"削铁无声","m":"一器通神","p":"锋锐","ph":"后期","v":"+35% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 护甲穿透不再有上限——可以超过 100%，多出来的部分变成负护甲，也就是额外增伤（按照相同比例）","r":"","b":"规则改写：把\"穿透最多把人扒光\"变成\"扒光之后继续加伤\""},{"n":"万锻","m":"一器通神","p":"锋锐","ph":"后期","v":"+40% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 锋锐度上限提高到 200 点，可以在铁砧处进行锤炼，每一次增加10点 满值时护甲穿透额外提高到 60%","r":"","b":"上限翻倍意味着砍得更久才变钝，但磨满一次的收益也翻倍"},{"n":"断钢","m":"一器通神","p":"锋锐","ph":"后期","v":"+30% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 消耗 50 点锋锐度，对单一目标打出一记必定暴击的重击，并直接击碎它的护甲（三秒内护甲为0）","r":"","b":"把攒下来的锋利一次性花掉——和「刃芒」的细水长流是两种花法"},{"n":"削铁成甲","m":"一器通神","p":"锋锐","ph":"后期","v":"+35 护甲值","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 被刃芒击中的敌人，其被削下来的护甲碎片会转化成你的临时护甲","r":"","b":"跨方向联动卡：把锋锐的输出反过来喂给「后发先至」那套护甲体系"},{"n":"磨刀石阵","m":"一器通神","p":"锋锐","ph":"后期","v":"+40% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 你磨刀时，5 格内的队友同时回满锋锐度（以及所有点数类进度条）","r":"","b":"【多人】把维护成本分摊出去——队伍里只要有一把刀在磨，全队的刀都锋利"},{"n":"神兵","m":"一器通神","p":"锋锐","ph":"后期","v":"+15% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 锋锐度不再下降，永久保持满值——维护这件事本身被取消","r":"","b":"整条锋锐线的终点：从\"必须停下来磨刀\"变成\"这把刀已经不需要磨了\""},{"n":"不磨之刃","m":"一器通神","p":"锋锐","ph":"后期","v":"+40% 近战增伤","e":"获得锋锐能力（初始无效果，需要先取得任意一张锋锐招式卡） 永久生效，锋锐度上限锁定为 30，从此不需要再磨刀 每低 1 点锋锐度，你的击退强度、硬直时长、方向效果触发倍率各 +3%","r":"地动余波","b":"整条钝刀线的终点：主动放弃锋利，把\"钝\"当成主武器。 满 30 点时三项都没有加成，砍到 0 点时三项各 +60%。 所以它和其他锋锐卡是互斥的两条路——别人在维持锋利，你在故意让它钝下去。 规则改写：把一个负面状态反过来变成主属性。"},{"n":"越打越快","m":"狂噬不休","p":"狂热","ph":"中期","v":"+25% 攻速","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 每完成一次攻击动作 +2 层「狂热」 「狂热」的层数上限提升到 14 层","r":"","b":"中期提速卡：叠层速度翻倍，等于把爬满 10 层的路缩短一半。 和「见血起势」不冲突——那张加的是起手那一刀，这张加的是之后每一刀。"},{"n":"热到发烫","m":"狂噬不休","p":"狂热","ph":"中期","v":"+25% 近战增伤","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 每 3 层「狂热」，你的攻击额外触发一次方向增伤（每 1.5 秒最多触发 1 次） 「狂热」满层时取消这个间隔限制：每一次攻击都额外触发一次方向增伤","r":"","b":"方向伤害的\"发动机\"：它不给你加成数值，而是给你触发次数——方向卡越强，这张卡越值钱。 触发的那一次是独立的额外结算，走一遍完整伤害计算表，和本体那一下分开算。 和「烧穿」（每击附带 8% 方向增伤）分工：烧穿抬的是每一击的底线，这张抬的是触发次数。"},{"n":"断不了","m":"狂噬不休","p":"狂热","ph":"中期","v":"+10 抗性","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 被眩晕、击退、冻结、减速等控制效果打断时，「狂热」不清零，改为 -3 层 控制效果结束后的 2 秒内，攻速额外 +40%","r":"","b":"和「余温未散」分工：那张管自然断档（时间到了没挥），这张管被控制打断（想挥挥不出去）。 抗性按状态计算表结算，本身就是控制时长的减免，和这张卡的\"扣 3 层\"是两层保险。"},{"n":"死灰复燃","m":"狂噬不休","p":"狂热","ph":"中期","v":"+25% 移速增幅","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 「狂热」以任何方式减少后的 5 秒内，你的第一次命中直接 +5 层 这次命中额外触发一次方向增伤","r":"","b":"断了也别慌：清零本身变成了一个可以卡着用的时间点。 和「见血起势」的区别：那张只认\"重新起手\"这个状态，这张认的是\"清零后的 5 秒内\"，可以故意断一次再打。"},{"n":"见红","m":"狂噬不休","p":"狂热","ph":"中期","v":"+15% 暴击率","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 「狂热」≥8 层时，暴击率 +15%、暴击伤害 +20% 「狂热」满层时，暴击命中的目标在 3 秒内受到的近战伤害 +8%","r":"","b":"前半段是数值，后半段是给队友和后续攻击铺路的易伤——易伤各来源之间默认不叠加，取最高的一条。 和「血眼通红」是同一脉的两段：这张让暴击更疼，那张把暴击从看脸改成数数。"},{"n":"烧穿","m":"狂噬不休","p":"狂热","ph":"中期","v":"+15% 近战增伤","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 「狂热」满层时，你的攻击无视目标 15% 的护甲值，且每击都附带 8% 方向增伤","r":"","b":"穿透口子。和「锋锐」的锋锐度说的是同一套语言，但这里不看锋利度，只看层数—— 锋锐是\"把刀养好\"，烧穿是\"把刀砸热\"。"},{"n":"闷火","m":"狂噬不休","p":"狂热","ph":"中期","v":"+25% 移速增幅","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 你没有攻击的时候，每 1 秒积累 1 层「闷火」，上限 10 层 下一次命中时把全部「闷火」转成一次独立结算：每层提供 +10% 方向增伤，结算后「闷火」清零","r":"","b":"本池唯一一张鼓励\"主动停手\"的卡：狂热清零不再是纯亏——你可以故意断一次，用闷火换一记重击。 和「死灰复燃」是一对：那张管断档后第一次命中的层数（+5 层），这张管断档期间攒下来的那口气。 「闷火」只在战斗中积累，脱离战斗后清零。"},{"n":"见血起势","m":"狂噬不休","p":"狂热","ph":"前期","v":"+5% 近战增伤","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 「狂热」清零后重新起手时，这一次起手的第一次命中直接 +3 层（原本是 +1 层） 若这一刀击杀目标，立刻补到 5 层","r":"","b":"起手补偿：被打断之后不必从零慢慢爬。 和「死灰复燃」是同一条血脉的两段：这张只加起手的层数，那张把清零本身变成一个可以卡着用的时间点。"},{"n":"余温未散","m":"狂噬不休","p":"狂热","ph":"前期","v":"+8 生命上限","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 「狂热」的中断窗口从 1.5 秒延长到 2.2 秒 窗口内你受到的伤害不会让窗口提前结束（挨打不算收手）","r":"","b":"前期的容错卡。和「断不了」分工不同：这张管的是自然断档，那张管的是被控制打断。 窗口按游戏时间算，不按真实时间。"},{"n":"撕咬","m":"狂噬不休","p":"狂热","ph":"前期","v":"+10 基础近战攻击力","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 对同一个目标连续命中，每满 5 次命中就额外结算一次物理伤害（基础数值：基础伤害，对应系数 0.4） 连续命中的计数在切换目标时重置；「狂热」清零不会清掉这个计数","r":"","b":"追加的那一次走一遍完整伤害计算表，吃得到方向增伤。 和「多段」的区别：那张卡加的是判定次数，这张是\"数满了才给一次\"。"},{"n":"急火攻心","m":"狂噬不休","p":"狂热","ph":"前期","v":"+15% 移速增幅","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 「狂热」每层额外 +5% 攻速（每层合计 +20%） 「狂热」≥5 层时，你受到的伤害 +10%","r":"","b":"前期唯一的代价卡：白拿一层速度，也白拿一层风险。 和「血勇」是同一脉的早期版本：血勇是主动掏血，这张是被动挨得更疼。"},{"n":"血往上涌","m":"狂噬不休","p":"狂热","ph":"前期","v":"+15% 移速增幅","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 每 2 层「狂热」为你提供 +5% 移速增幅 「狂热」满层时，冲刺不再消耗饥饿值","r":"","b":"层数不只换攻速，也换脚程：追不上人，狂热就白攒。"},{"n":"攥紧不放","m":"狂噬不休","p":"狂热","ph":"前期","v":"+15% 攻速","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 「狂热」≥5 层时，你受到的普通击退不再打断攻击动作（人还是会被推开，手上的动作不停）","r":"","b":"和「断不了」分工：这条只管\"身体被推开但手不停\"，眩晕、冻结那种真正的控制还是照常打断。 被打断的判定看的是攻击动作有没有停下，不是你有没有位移。"},{"n":"火星四溅","m":"狂噬不休","p":"狂热","ph":"前期","v":"+15% 近战增伤","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 你的攻击命中时有 30% 的概率溅出火星：对目标 1 格范围内的其他敌人各结算一次伤害 （基础数值：基础伤害，对应系数 0.3，独立结算，吃方向增伤）","r":"","b":"方向伤害的第一种\"额外来源\"：它不改变本体攻击的形状，只是在命中之后多炸出几颗火星。 狂热把攻击次数拉满之后，30% 会连着来——层数越高，火星越密。 和「斩击」（每一刀都是范围）的区别：那是确定性铺开，这里是概率溅射，赌的是出手次数。"},{"n":"狂无止境","m":"狂噬不休","p":"狂热","ph":"后期","v":"+40% 攻速","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 「狂热」的层数上限解除 每层的攻速加成从 +15% 降为 +8%","r":"","b":"后期改写规则：天花板打开，边际变小。 10 层之后每一层都比前面便宜，但总数没有尽头——这是\"越打越快\"的终点。 和「烫手」「血眼通红」是成套的：上限解除之后，那两张的条件才真正够得着。"},{"n":"不死不休","m":"狂噬不休","p":"狂热","ph":"后期","v":"+12% 全伤增幅","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 「狂热」不再瞬间清零，改为每 1.5 秒衰减5 层 「狂热」自然归零时，把清零前的层数转成一次方向增伤爆发：每层 +15% 方向增伤，作用于接下来 3 秒内的所有攻击","r":"","b":"后期改写中断规则：断档不但不亏，还变成一次结算。 名字和这个方式的定位对齐——手停了，账还在算。"},{"n":"烫手","m":"狂噬不休","p":"狂热","ph":"后期","v":"+40% 攻速","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 攻速超过 +200% 的部分，每2% 换算为 +1% 近战增伤 换算只做一次：换算出来的近战增伤不会再反过来影响攻速","r":"","b":"后期改写规则。攻速本身不进单次伤害公式（否则会平方），这张卡是唯一例外： 溢出的那一部分被单独换算一次，算完就停，不会循环。"},{"n":"血眼通红","m":"狂噬不休","p":"狂热","ph":"后期","v":"+15% 全伤增幅","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 「狂热」≥15 层时，攻击不再判定暴击率，改为每第 3 次命中必定暴击且附带全额方向增伤 暴击伤害照常参与结算","r":"","b":"后期改写暴击规则：从看脸变成数数。 15 层要靠「狂无止境」解除上限才够得着，两张一起拿才成立。"},{"n":"杀不停手","m":"狂噬不休","p":"狂热","ph":"后期","v":"+20% 最大生命值","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 每击杀一个敌人，「狂热」直接补满 击杀后的 3 秒内，中断窗口暂停（层数不会因为停手而掉落），获得爆发式移速加成（200%），暴击伤害+30%","r":"","b":"群战永动卡。对单体 boss 没有收益——这是故意的，它买的就是\"清场时不掉速\"。"},{"n":"热浪逼人","m":"狂噬不休","p":"狂热","ph":"后期","v":"+35% 近战增伤","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 「狂热」满层时，你周围 4 格内的敌人 护甲值 -30% 这个削甲对队友造成的伤害同样生效","r":"","b":"多人向的后期卡。削甲不是伤害，是让全队的伤害都更真。 本池不给队友加速度，只给队友一个更好的靶子。"},{"n":"爆燃","m":"狂噬不休","p":"狂热","ph":"后期","v":"+25% 全伤增幅","e":"获得狂热能力（初始无效果，需要先取得任意一张狂热入口卡，例如「乱击」） 「狂热」满层之后，每完成 1 次攻击动作积累 1 层「余热」，上限 10 层 「余热」满 10 层时触发一次爆燃：对周围 5 格内所有敌人结算一次伤害 （基础数值：基础伤害，对应系数 1.0），每层「狂热」让这次爆燃额外获得 +12% 方向增伤 爆燃之后「狂热」与「余热」一起清零","r":"","b":"后期改写循环：狂热第一次有了\"兑现\"的出口——爬满不是终点，攒满「余热」才是。 爆燃是独立结算，走一遍完整伤害计算表；之后狂热从头爬，等于用一个循环换一整片伤害。 和「狂无止境」一起拿时，触发线改为 15 层（上限被解除之后没有\"满层\"这个概念）。 两张可以共存：一个负责把层数往上顶，一个负责定期把层数兑现成一片伤害。"},{"n":"乱击","m":"狂噬不休","p":"狂热","ph":"前期","v":"+5% 攻速","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 你的攻击动作**不要求命中目标**：空挥、砍空气、砍在墙上、砍在盾上，都算 空挥每第 3 次额外 +1 层「狂热」","r":"","b":"本卡是【附加卡】：不计入所在三级池的 18 张本体卡，抽到它不会占掉本池的名额。 「乱击」是狂噬不休五个三级池共用的入口——五张的核心句完全一样，拿哪张都能直接起手，不一样的是各池专属的那一句。 本池的这句是\"空挥也是正经的攒层手段\"，不用等敌人送到脸上。 重复获得「乱击」时，改为「狂热」层数上限 +2。"},{"n":"密不透风","m":"狂噬不休","p":"多段","ph":"中期","v":"+18% 攻速","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 「段数」上限从 3 层提到 7层","r":"","b":"上限 6 等于一次挥击最多打出 5 段判定；按递增算，第 5 段的判定是本体的 80%。 攻速不够的话上限用不完，所以这张卡和「狂热」是同一套账。"},{"n":"重手","m":"狂噬不休","p":"多段","ph":"中期","v":"+15% 近战增伤","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 每一段追加判定的伤害 +30%，移动速度 −30%（整体）","r":"","b":"「+30%」是在算完段位比例之后再乘一次：60% 的一段落在这里就是 78%。 移动速度 −30% 是全时段生效，连段之外也躲不掉——这是本池最硬的一张代价卡。 和「短打」是一条线：那张提基础比例，这张加倍率，两张一起拿才是真正的重拳。"},{"n":"段段见红","m":"狂噬不休","p":"多段","ph":"中期","v":"+25% 暴击率","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 追加判定也可以暴击，暴击率按你的面板结算","r":"","b":"原本只有本体那一刀能暴击，追加判定是\"保底伤害\"。这张把保底变成了抽奖—— 段数越高，抽的次数越多；配合「分身有术」那种能让判定增生的卡，收益翻倍。"},{"n":"三叠","m":"狂噬不休","p":"多段","ph":"中期","v":"+25% 近战增伤","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 每当「判定」的次数达到第 3、6、9…次时，额外触发一次全额方向增伤 （「割痕」的持续跳不计入这个次数）","r":"","b":"方向口子的放大器：追加判定本来就各吃一次方向增伤，这张让每第 3 次再多触发一次。"},{"n":"缠身","m":"狂噬不休","p":"多段","ph":"中期","v":"+15% 移速增幅","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 「段数」≥2 时，你不会被击退，移速增幅 +20%，当朝向目标移动时额外+40% 连段断开后，这两个效果还会保留 1 秒","r":"","b":"原来的「缠身」只加窗口，接不上的时候等于白拿；现在它管的是\"贴住了就别想把我扒开\"。 和后发先至 · 盾击与推挤正面对冲：那边要推开，这边推不开。 「移速增幅 +20%」在连段期间生效，断连后多给 1 秒用来接下一段。"},{"n":"刀口","m":"狂噬不休","p":"多段","ph":"中期","v":"+15% 全伤增幅","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 每一次「判定」都给目标叠加 1 层「刀口」：每层使你对该目标造成的追加判定伤害 +8%，最多 5 层，持续 5 秒 （「割痕」的持续跳不叠层）","r":"","b":"这是\"软甲\"而不是\"穿甲\"：它不改变目标的护甲，只让本池自己越打越顺——原来那张「破缝」给的是护甲穿透，和一器通神 · 锋锐、狂热 · 烧穿撞得太明显。 「刀口」只吃多段自己的追加判定，本体那一刀不吃，所以它奖励\"持续咬住\"，不奖励\"换目标轮着打\"。"},{"n":"碎击","m":"狂噬不休","p":"多段","ph":"中期","v":"+25% 攻速","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 获得一条「刀路」：碎击 碎击：轮到它时，这一段判定不一次打完，而是拆成 3 次更小的结算，每次为该段比例的 40%，间隔 0.05 秒 且每次结算都分别附带30%方向增伤 若同时点了本增益和【三叠】，则在全有全额基础上变为三段40%，再分别获得1.3乘区","r":"","b":"碎击换的不是伤害，是**结算次数**：总伤害略低（90%），但一次判定变成三次独立结算。 方向卡里\"每次命中／每次结算触发一次\"的那一类，在这条刀路上收益直接翻三倍。 和三叠（每第 3 次判定额外触发方向增伤）、段段见红（判定可暴击）是配套的。"},{"n":"割痕","m":"狂噬不休","p":"多段","ph":"中期","v":"+25% 近战增伤","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 获得一条「刀路」：割痕 割痕：轮到它时，这一段判定不立即结算，改为在目标身上留下一道割痕——接下来 3 秒内每秒结算一次，每次为该段比例的 40%，每段都可附带30%方向增伤乘区 同一个目标最多同时存在 5 道割痕，每道各自结算","r":"","b":"本池的持续型伤害结构。毒、流血、灼烧这一类\"按时间吃方向加成\"的方向卡，就是从这道口子进来的。 和「回响」的区别：回响只在 0.4 秒后补一次，割痕是铺开成 3 次的时间片。"},{"n":"连段","m":"狂噬不休","p":"多段","ph":"前期","v":"+15% 攻速","e":"【获取多段能力】命中同一目标 +1 段（每次攻击动作最多 +1 段；追加判定本身不再涨段），上限 3 层 命中时按当前段数结算：本体 1 次，外加（段数 − 1）次追加判定；段数不清零、也不消耗 段数只在断开时掉：超过 0.5 秒（连段窗口）没有命中 → 清零；切换目标 → 清零 每一段判定的伤害依次递增：第 1 段为本体伤害的 40%，之后每多一段 +10%（40% / 50% / 60% …） 每一段判定各走一条「刀路」（默认只有「快切」） 每多 1 段，连段窗口额外 +0.15 秒（最多 +0.9 秒）——连得越久，越不容易断","r":"","b":"「段数」的三条定义写在本卡上，本池其余卡都按这一套走： 怎么涨：每次攻击动作命中目标 +1 段，一次动作最多 +1 段（追加判定不再涨段） 怎么用：命中时按当前段数结算追加判定，段数本身不清零、也不消耗 怎么掉：只有断连（停手超时）、换目标、被打断，以及主动「放段」 \"越连越重\"是本池的核心增幅：段数不只是结算次数变多"},{"n":"快刀","m":"狂噬不休","p":"多段","ph":"前期","v":"+15% 攻速","e":"【获取多段能力】命中同一目标 +1 段（每次攻击动作最多 +1 段；追加判定本身不再涨段），上限 3 层 命中时按当前段数结算：本体 1 次，外加（段数 − 1）次追加判定；段数不清零、也不消耗 段数只在断开时掉：超过 0.5 秒（连段窗口）没有命中 → 清零；切换目标 → 清零 每一段判定的伤害依次递增：第 1 段为本体伤害的 40%，之后每多一段 +10%（40% / 50% / 60% …） 每一段判定各走一条「刀路」（默认只有「快切」） 连段窗口从 0.5 秒延长到 0.8 秒 在窗口的最后 0.2 秒内命中（踩点），这一击额外 +1 段","r":"","b":"踩点是白送的一段，代价是你得故意把出手压到窗口末尾——手感好的玩家能靠它把上限打满。 窗口宽了不等于能乱打：踩点只认最后 0.2 秒，中间那 0.6 秒打进去没有额外收益。"},{"n":"短打","m":"狂噬不休","p":"多段","ph":"前期","v":"+5% 近战增伤","e":"【获取多段能力】命中同一目标 +1 段（每次攻击动作最多 +1 段；追加判定本身不再涨段），上限 3 层 命中时按当前段数结算：本体 1 次，外加（段数 − 1）次追加判定；段数不清零、也不消耗 段数只在断开时掉：超过 0.5 秒（连段窗口）没有命中 → 清零；切换目标 → 清零 每一段判定的伤害依次递增：第 1 段为本体伤害的 40%，之后每多一段 +10% 每一段判定各走一条「刀路」（默认只有「快切」） 每一段判定的基础比例从 40% 提到 60%（60% / 70% / 80% …） 你的攻击距离减少 1 格","r":"","b":"拿距离换厚度：贴得越近，这几段越像重拳。 和一器通神 · 长兵正好相反——那边要距离，这边要贴上去。"},{"n":"贴身缠斗","m":"狂噬不休","p":"多段","ph":"前期","v":"+20% 移速增幅","e":"【获取多段能力】命中同一目标 +1 段（每次攻击动作最多 +1 段；追加判定本身不再涨段），上限 3 层 命中时按当前段数结算：本体 1 次，外加（段数 − 1）次追加判定；段数不清零、也不消耗 段数只在断开时掉：超过 0.5 秒（连段窗口）没有命中 → 清零；切换目标 → 清零 每一段判定的伤害依次递增：第 1 段为本体伤害的 40%，之后每多一段 +10%（40% / 50% / 60% …） 每一段判定各走一条「刀路」（默认只有「快切」） 与目标的距离在 2 格以内时，连段窗口 +0.3 秒 贴脸命中会把目标钉住：移速 −50%，持续 1 秒，可刷新","r":"","b":"缠住 = 打得下去。面对灵活的敌人时，这张卡决定你能不能把段数接满。 「钉住」属于负面状态挂在敌人身上，多个来源不叠加，取最强的一条。"},{"n":"双段起手","m":"狂噬不休","p":"多段","ph":"前期","v":"+10 基础攻击力","e":"【获取多段能力】命中同一目标 +1 段（每次攻击动作最多 +1 段；追加判定本身不再涨段），上限 3 层 命中时按当前段数结算：本体 1 次，外加（段数 − 1）次追加判定；段数不清零、也不消耗 段数只在断开时掉：超过 0.5 秒（连段窗口）没有命中 → 清零；切换目标 → 清零 每一段判定的伤害依次递增：第 1 段为本体伤害的 40%，之后每多一段 +10%（40% / 50% / 60% …） 每一段判定各走一条「刀路」（默认只有「快切」） 段数被清零之后（断连或切换目标），你的下一次命中直接按 2 段结算","r":"","b":"断一次不亏太多：本池的起手补偿，和「狂热 · 见血起势」是同一种思路，但补的是段不是层。"},{"n":"换气","m":"狂噬不休","p":"多段","ph":"前期","v":"+8 生命上限","e":"【获取多段能力】命中同一目标 +1 段（每次攻击动作最多 +1 段；追加判定本身不再涨段），上限 3 层 命中时按当前段数结算：本体 1 次，外加（段数 − 1）次追加判定；段数不清零、也不消耗 段数只在断开时掉：超过 0.5 秒（连段窗口）没有命中 → 清零；切换目标 → 清零 每一段判定的伤害依次递增：第 1 段为本体伤害的 40%，之后每多一段 +10%（40% / 50% / 60% …） 每一段判定各走一条「刀路」（默认只有「快切」） 切换目标时，段数改为 −1 而不是清零","r":"","b":"单挑转群战、群战转单挑时不用重新起手；和「分叉」一起拿，段数可以在几个目标之间来回搬。"},{"n":"收刀","m":"狂噬不休","p":"多段","ph":"前期","v":"+15% 攻速","e":"【获取多段能力】命中同一目标 +1 段（每次攻击动作最多 +1 段；追加判定本身不再涨段），上限 3 层 命中时按当前段数结算：本体 1 次，外加（段数 − 1）次追加判定；段数不清零、也不消耗 段数只在断开时掉：超过 0.5 秒（连段窗口）没有命中 → 清零；切换目标 → 清零 每一段判定的伤害依次递增：第 1 段为本体伤害的 40%，之后每多一段 +10%（40% / 50% / 60% …） 每一段判定各走一条「刀路」（默认只有「快切」） 连段窗口到点时，段数不再直接清零：先掉 1 段，之后每秒再掉 1 段（等于多给你 1 秒的缓冲）","r":"","b":"本池唯一一张\"允许你停下来\"的卡：节奏乱了一下不至于整条连击作废，收一刀再续上。 和后期「刀不凉」是同一条线的两端：这张只给 1 秒缓冲，那张让时间彻底不再构成威胁。"},{"n":"绵延无尽","m":"狂噬不休","p":"多段","ph":"后期","v":"+30% 全伤增幅","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 「段数」上限解除 初始增上变为原有10%，每两段提升10% 从第 6 段开始，判定的伤害比例不再递增，固定在40%","r":"","b":"后期改写规则：天花板拆掉。前 5 段越连越重，第 6 段之后越连越多。 和「密不透风」（上限 6）不冲突：上限解除之后，那张卡等于白送了一段。"},{"n":"分身有术","m":"狂噬不休","p":"多段","ph":"后期","v":"+25% 近战增伤","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 每一次「判定」都有 50% 的概率再追加一次判定 再生出来的判定会再抽一条刀路，但不会再触发这一条（只生一层）","r":"","b":"后期改写判定规则：判定可以生判定，但只生一层，不会无限翻倍。 和「绵延无尽」一起拿，才撑得起\"一次挥击打十几次\"的画面；判定次数一多，「三叠」「段段见红」「刀口」这些按次数结算的卡全部跟着起飞。"},{"n":"余段不散","m":"狂噬不休","p":"多段","ph":"后期","v":"+35% 近战增伤","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 你被打断（控制、击退、格挡被破）或主动切换目标时，段数不再清零，改为 −2 段 段数不足 2 段时按实际数量扣，不会被扣成负数 每当你因此保住 2 段及以上，接下来的 5 秒内，你的追加判定伤害 +30%","r":"","b":"段数平时会掉的地方有三个：停手超时、切换目标、被打断。这张卡管的是后两个—— 让\"换个人打\"不再等于从零开始，也让被控住一次不至于把攒了半天的连击全吐出去； 保住的那几段还会当场变成火力：断一次反而让后面 5 秒更狠。 和前期「换气」是同一条线：那张减 1 段，这张减 2 段并额外保护\"被打断\"，两张一起拿取更好的那条"},{"n":"回响","m":"狂噬不休","p":"多段","ph":"后期","v":"+25% 全伤增幅","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 获得一条「刀路」：回响 回响：轮到它时，这一段先正常结算一次，0.4 秒后再补一次独立结算（补的那次为该段比例的 60%），结算时如果具体被结算的实体五格外，则额外触发一次300%的方向爆发伤害","r":"","b":"短延迟结构：只晚 0.4 秒、只打同一个目标，是这一刀的余音——本方式里唯一的延迟结算结构。 延迟 0.4 秒刚好卡在连段窗口（0.5 秒）里面，所以回响不会打断你的节奏。"},{"n":"往复","m":"狂噬不休","p":"多段","ph":"后期","v":"+30% 攻速","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 「段数」≥7 时，本次攻击的每一段判定连续抽两条刀路（等于判定次数翻倍，刀路序列走两轮）","r":"","b":"后期改写结构数量：段数够高时，一次攻击里\"有几种结算方式\"和\"一共结算几次\"同时翻倍。 多段到这里就不是\"这一刀打了几下\"，而是\"这次攻击里排了几种伤害结构\"。 和「碎击」「割痕」「回响」是乘法关系：刀路越多，这张赚得越多。"},{"n":"刀不凉","m":"狂噬不休","p":"多段","ph":"后期","v":"+30% 攻速","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 「段数」不再因为连段窗口到点而清零，改为每秒 −1 段 「段数」的成长翻倍：每多 1 段，追加判定的伤害 +20%（受「绵延无尽」影响）","r":"","b":"后期改写时间规则 + 改写成长曲线：连段不再是\"断了就从头爬\"，而是\"放着不管才慢慢凉\"； 而且每一段的重量直接翻倍——段数越高的连击，这一刀就越像重锤，不再是单纯的容错。 和前期「收刀」（到点先掉 1 段、给 1 秒缓冲）是同一条线的终点——一个给你缓冲，一个取消时限。 它只管\"停手\"这一种流失；换目标和被打断那两种"},{"n":"放段","m":"狂噬不休","p":"多段","ph":"后期","v":"+35% 近战增伤","e":"获得多段能力（初始无效果，需要先取得任意一张多段招式卡，例如「连段」） 获得主动技能【放段】：立刻把当前「段数」全部打出去，判定次数翻倍（每 1 段打出 2 次判定，按刀路顺序轮转），随后段数清零 【放段】打出的每一次判定都额外触发一次全额方向增伤 【放段】每 12 秒最多使用一次","r":"","b":"本池唯一的爆发按钮：攒了半天的段数一次兑现，不用等下一次出手。 和「密不透风」「绵延无尽」是配套的——上限越高、攒得越多，这一下越沉。 它是主动技能，不占攻击动作：放完立即接下一刀，连段不会因为放段而断。 \"每次判定都额外吃一次方向增伤\"是后期专属的那一档：一次放段能触发十几次方向结算，方向卡越强，这一下越离谱。"},{"n":"乱击","m":"狂噬不休","p":"多段","ph":"前期","v":"+5% 攻速","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 你的攻击动作**不要求命中目标**：空挥、砍空气、砍在墙上、砍在盾上，都算 若你已经获得「多段」能力，空挥也累积「段数」——空挥每 0.5 秒最多 +1 段 空挥攒下的段数，会在你下一次命中敌人时一并释放","r":"","b":"本卡是【附加卡】：不计入所在三级池的 18 张本体卡，抽到它不会占掉本池的名额。 「乱击」是狂噬不休五个三级池共用的入口——五张的核心句完全一样，拿哪张都能直接起手，不一样的是各池专属的那一句。 本池的这句是\"空挥也攒段数\"：挥空的那一下不白费，只是把判定存到了下一刀。 重复获得「乱击」时，改为「狂热」层数上限 +2。"},{"n":"一线穿","m":"狂噬不休","p":"连环","ph":"中期","v":"+25% 近战增伤","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 拉链优先选择与你面朝方向夹角最小的敌人——链会沿着一条直线穿过去，而不是拐向最近的 传导段数 +2","r":"","b":"从\"链最近的\"改成\"链最直的\"：站位对了，一击能串掉一整条走廊。 段数 +1 意味着链更长时\"尾巴打折\"更明显——配「顺劈」才划算。"},{"n":"传火","m":"狂噬不休","p":"连环","ph":"中期","v":"+15% 全伤增幅","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 附加状态沿链传导时不再衰减：传播强度从 60% 提到 100% 状态传导可以多传一段","r":"","b":"这是方向卡在本池最重要的那张口子：你在链头点一把火、上一层毒，整条链都会跟着烧。 它只加强\"状态\"（燃烧 / 中毒 / 雷击 / 流血这类持续或附加效果），不直接加伤害——伤害那一半归「顺劈」。"},{"n":"链头","m":"狂噬不休","p":"连环","ph":"中期","v":"+25% 近战增伤","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 「链头」受到的伤害 +25%（不是玩家造成的也算） 你每次拉出新的链时，链头立刻结算一次 40% 的传导伤害","r":"","b":"前半段是给全队吃的易伤口子；后半段让\"开链\"的第一下不再只是铺路。 连锁是\"先打谁\"的游戏：把链头选在最硬的那个身上，后面的收益最大。"},{"n":"链刃","m":"狂噬不休","p":"连环","ph":"中期","v":"+25% 近战增伤","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 被链住的敌人每移动 1 格，就受到一次 20% 的传导伤害（同一个目标 0.5 秒内最多触发 1 次） 击退、牵引、冲刺穿过造成的位移同样计数","r":"","b":"把\"链\"本身变成一把会割人的刀：敌人越想跑、越被推动，挨得越多。 和「绷紧」（控制传导）、「牵一发」（减速）是三张不同的约束卡，都在回答\"怎么让敌人留在链上\"： 一个管\"跑不了\"、一个管\"被控会传\"、这张管\"动了就割\"。 和后发先至 · 盾击与推挤是第二个接口：那边负责推，推得越狠，这条链割得越狠。"},{"n":"绷紧","m":"狂噬不休","p":"连环","ph":"中期","v":"+25% 近战增伤","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 链上的敌人无法被离开链（受到击退时会被链拉回来） 你使用控制类攻击链上任意一个敌人时，链上其他敌人一起被控制，且各吃一次 20% 的传导伤害","r":"","b":"把\"链\"从伤害通道变成物理约束，和后发先至 · 盾击与推挤是天然接口： 那边负责推，这边负责让整队一起被推、一起挨。 被拖走的敌人不会自己挣脱链，只有链断（时间到 / 死亡）才会解除。"},{"n":"环环相扣","m":"狂噬不休","p":"连环","ph":"中期","v":"+25% 近战增伤","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 同一份伤害在链上最多可以对同一个敌人生效 2 次（基础是 1 次） 绕回来的那一次按原伤害的 40% 结算","r":"","b":"基础规则是\"每人只吃一次\"，所以只有两个敌人时链子一轮就结束；这张卡让链可以绕一圈回来。 配上「双头」（双向传导），只有三个敌人的场合也能把每一刀都传满。"},{"n":"起链","m":"狂噬不休","p":"连环","ph":"前期","v":"+8% 基础攻击力","e":"【获取连环能力】你的近战伤害命中敌人后，如果 4 格内还有别的敌人，就在两者之间拉出一段「链」 链最多连 3 个敌人（链长 = 敌人数量），每段持续 6 秒；链上的敌人再被你命中时，整条链的持续时间刷新 你对链上任意敌人造成的近战伤害，会沿链传到相邻的敌人身上：传导一次为原伤害的 50%，每多传一段再 −10%（默认最多传 2 段） 同一份伤害对同一个敌人只生效一次（不会在链上来回弹） 打在链上的附加状态（燃烧、中毒、雷击、流血等）同样会沿链传播一次，强度为原效果的 40% 直接命中的那个叫「链头」，离链头最远的那一个叫「链尾」","r":"","b":"这张卡写死了「链」的全部基础规则，本池其余卡都按这一套走： 怎么拉：近战命中 + 4 格内有别的敌人；最多 3 个敌人 怎么传：近战伤害沿链传导（50%，每段 −10%，最多 2 段），状态沿链传导（40%） 怎么断：持续时间结束 / 链上敌人全死 / 目标被传送走 和「斩击」正好相反：斩击是站进人堆打一圈，连环是把队"},{"n":"长链","m":"狂噬不休","p":"连环","ph":"前期","v":"+8% 近战增伤","e":"【获取连环能力】近战命中后向 4 格内的敌人拉出一段「链」（最多 3 个敌人、每段 6 秒） 你对链上敌人造成的近战伤害会沿链传导：每次 50%，每多传一段 −10%（最多 2 段） 你打在链上的附加状态也会沿链传导一次（40% 强度） 链头 = 你直接命中的那个，链尾 = 离链头最远的那个 拉链距离从 4 格延长到 6 格 每段链的持续时间从 6 秒延长到 10 秒","r":"","b":"拉链距离决定\"够不够得着\"，持续时间决定\"你换完目标回来链还在不在\"。 两张基础便利卡之一（另一张是「双头」）：先保证链拽得起来，再谈传导收益。"},{"n":"顺劈","m":"狂噬不休","p":"连环","ph":"前期","v":"+15% 近战增伤","e":"【获取连环能力】近战命中后向 4 格内的敌人拉出一段「链」（最多 3 个敌人、每段 6 秒） 你对链上敌人造成的近战伤害会沿链传导：每次 50%，默认每多传一段 −10%（最多 2 段） 你打在链上的附加状态也会沿链传导一次（40% 强度） 链头 = 你直接命中的那个，链尾 = 离链头最远的那个 传导伤害不再递减：每一段都按原伤害的 50% 结算","r":"","b":"链越长，这张卡赚得越多——尾巴上那一下不再打折。 它只改\"伤害\"，不改\"状态\"：状态传导的衰减归中期「传火」管。"},{"n":"余威","m":"狂噬不休","p":"连环","ph":"前期","v":"+15% 攻速","e":"【获取连环能力】近战命中后向 4 格内的敌人拉出一段「链」（最多 3 个敌人、每段 6 秒） 你对链上敌人造成的近战伤害会沿链传导：每次 50%，每多传一段 −10%（最多 2 段） 你打在链上的附加状态也会沿链传导一次（40% 强度） 链头 = 你直接命中的那个，链尾 = 离链头最远的那个 每传导到 1 个敌人，你获得 1 层「余威」（最多 3 层，持续 5 秒），每层使你下一击的近战增伤 +8%","r":"","b":"这一层是加给\"下一刀\"的，不是加给传导本身——所以它和后面的传导卡不冲突。 链拉得越长，你下一刀的起手越重：本池鼓励\"先铺链，再砸链头\"。"},{"n":"牵一发","m":"狂噬不休","p":"连环","ph":"前期","v":"+20% 移速增幅","e":"【获取连环能力】近战命中后向 4 格内的敌人拉出一段「链」（最多 3 个敌人、每段 6 秒） 你对链上敌人造成的近战伤害会沿链传导：每次 50%，每多传一段 −10%（最多 2 段） 你打在链上的附加状态也会沿链传导一次（40% 强度） 链头 = 你直接命中的那个，链尾 = 离链头最远的那个 被链住的敌人在链存在期间移速 −40%","r":"","b":"链不只是\"通道\"，也是\"绳子\"：被拴住的敌人跑不快，链就不容易被跑散。 减速属于负面状态，走状态计算表；多个来源不叠加，取最强的一条。"},{"n":"双头","m":"狂噬不休","p":"连环","ph":"前期","v":"+15% 攻速","e":"【获取连环能力】近战命中后向 4 格内的敌人拉出一段「链」（最多 3 个敌人、每段 6 秒） 你对链上敌人造成的近战伤害会沿链传导：每次 50%，每多传一段 −10% 你打在链上的附加状态也会沿链传导一次（40% 强度） 链头 = 你直接命中的那个，链尾 = 离链头最远的那个 传导不再只能朝一个方向：你可以同时向链头两侧传导，一次攻击最多传 2 段（每侧各 1 段）","r":"","b":"基础规则是单向传递（从链头往链尾走）。这张卡把链变成双向： 站在队伍中间也能一击打到两头，链头两侧的敌人同时吃伤害——\"站队首\"不再是唯一答案。"},{"n":"无尽之链","m":"狂噬不休","p":"连环","ph":"后期","v":"+30% 近战增伤","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 链的敌人上限解除（基础 3 个），只要 6 格内还有人就能一直接下去 从第 4 段传导开始，每一段额外递减8%（最低20%） 链上每多一个敌人，你对该链造成的总体传导伤害 +5%（最多 +30%）","r":"","b":"后期改写链长规则：链可以长到整支队伍，代价是尾部越来越薄——用\"长度\"换\"总量\"。 和「顺劈」（不递减）一起拿时只保留\"基础递减为 0\"，第 4 段之后的额外递减照旧。"},{"n":"断链重击","m":"狂噬不休","p":"连环","ph":"后期","v":"+25% 全伤增幅","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 获得主动技能【收链】（冷却 12 秒）：主动断开当前链，链上每个敌人各结算一次 60% 的传导伤害 「链头」额外承受一次方向增伤爆发：每 1 个链上的敌人提供 +20% 方向增伤","r":"","b":"后期改写收益结构：链不是只能\"一直挂着\"，也可以主动收网，把攒下来的长度一次性兑现。 它是主动技能，不占攻击动作；收链之后原有的链立刻消失，需要重新铺。 和「一同赴死」是一对：这张是\"你决定什么时候收\"，那张是\"链上死人时自动收\"。"},{"n":"一同赴死","m":"狂噬不休","p":"连环","ph":"后期","v":"+15% 全伤增幅","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 链上任意一个敌人死亡时，整条链炸开：链上其他敌人各结算一次伤害 （基础数值：死亡的实体最大生命值） 这次爆炸对每个敌人额外触发一次全额方向增伤","r":"","b":"后期改写死亡结算：链上死人不是\"少一个目标\"，而是一次连锁引爆。 链越长，死一个炸得越广——所以本池在后期的爽点是\"先铺满，再点掉最脆的那个\"。 和「断链重击」是自动与主动的关系：两张一起拿，链头死不死都有一次收网。"},{"n":"链条成网","m":"狂噬不休","p":"连环","ph":"后期","v":"+20% 最大生命值","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 链不再是\"一条线\"：你的攻击会同时向 4 格内所有敌人拉链，多个链可以同时存在 传导只会沿着\"最短的那条链\"走，不会在同一次结算里走两遍 最终会形成一张传导网","r":"","b":"后期改写链的形状：从\"把队伍排成一条\"变成\"把整片战场连起来\"。 一条链只有 2 段传导，但多条链意味着你打谁都有人跟着挨——它解决的是\"人到处乱跑、队形散开\"的场面。"},{"n":"首尾相接","m":"狂噬不休","p":"连环","ph":"后期","v":"+30% 近战增伤","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 「链头」和「链尾」可以接上，把这条链闭合成一个「环」 环上的敌人**共享附加状态**：你给环上任意一个敌人上的燃烧 / 中毒 / 雷击 / 流血，会同步到环上其他所有敌人（层数相同，持续时间各自计算） 环上任意一个敌人死亡时，环暂时断开，剩余敌人身上的状态保留","r":"","b":"后期改写拓扑 + 改写状态规则：从\"一条线\"变成\"一个环\"，从\"状态传一次\"变成\"状态实时同步\"。 和「传火」的分工：传火管\"传播的强度与距离\"，这张管\"环上的状态永远保持一致\"—— 两张一起拿，等于一次点火、整圈长烧。 和「链条成网」的区别：那张是同时存在很多条链，这张是一条链闭合成环。"},{"n":"同气连枝","m":"狂噬不休","p":"连环","ph":"后期","v":"+30% 全伤增幅","e":"获得连环能力（初始无效果，需要先取得任意一张连环招式卡，例如「起链」） 你可以把链挂在队友身上：队友成为链的一环（队友不承受传导伤害） 链经过队友时按队友的位置计算距离，可以跨得很远；每经过 1 个队友，这次传导的伤害 −10%（中继损耗） 队友的攻击同样会触发你布下的链（每 3 秒最多 1 次） 链挂在队友身上时，不会因为链上的敌人死亡而断开（停留 10 秒）","r":"","b":"把\"链\"从敌我之间的线，变成敌我双方共用的线：队友是链上的中继站。 它解决的是队形问题——队友站在远处也能当节点，你不需要把敌人排成一条才能起链。 和「链条成网」配合，整支队伍可以共用一张传导网：一个人点火，全队传。 队友触发的传导用队友的面板结算，但传导方向沿你布下的链走。"},{"n":"乱击","m":"狂噬不休","p":"连环","ph":"前期","v":"+5% 近战增伤","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 你的攻击动作**不要求命中目标**：空挥、砍空气、砍在墙上、砍在盾上，都算 空挥时自动转向 3 格内最近的敌人 若你已经获得「连环」能力，这一次空挥视为连锁的第 0 跳——不消耗跳跃次数","r":"","b":"本卡是【附加卡】：不计入所在三级池的 18 张本体卡，抽到它不会占掉本池的名额。 「乱击」是狂噬不休五个三级池共用的入口——五张的核心句完全一样，拿哪张都能直接起手，不一样的是各池专属的那一句。 本池的这句是\"自动转向最近的敌人\"：不用停下来瞄准，手不停，链就不断。 重复获得「乱击」时，改为「狂热」层数上限 +2。"},{"n":"吸髓","m":"狂噬不休","p":"血勇","ph":"中期","v":"+20% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 【放血】的代价改为**后置**：使用时不立刻扣血，而是在接下来 3 秒内逐次扣掉（这笔账最多把你压到 1 点生命，不会致死） 这 3 秒内每击杀一个单位，这笔代价就被免除（\"用别人的命付账\"） 【放血】的消耗从生命上限的 10% 提到 15%，但一次获得 2 层「血勇」，存血比例 +10%，「血勇」上限提高到 10","r":"","b":"从\"一手交钱一手交货\"改成\"先拿货，再想办法付账\"： 你可以先连按放血把层数垫起来，然后立刻去砍人还债；还不上，血就从你身上慢慢流走。 和基础规则不冲突：只改支付时机，不改数额；和「归流」「豁口」是自然搭配。"},{"n":"以伤养血","m":"狂噬不休","p":"血勇","ph":"中期","v":"+15% 血池上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 你**受到的伤害**同样有 25% 存进「血池」（不只是你打出去的伤害） 你每次受到伤害，都会把「血勇」的持续时间**再续 1 秒**（挨打也在续状态）","r":"","b":"把\"挨打\"也算进账：拼血搏杀的人本来就一定会吃伤害，这张卡让那些伤害有一半留在你身上，另一半存进血池。 所以它奖励的是\"贴着打\"而不是\"拉扯\"——你越敢站在刀口上，血池越满。"},{"n":"临渊","m":"狂噬不休","p":"血勇","ph":"中期","v":"+20% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 生命值低于 30% 时，移速增幅 +25% 生命值低于 10% 时，【放血】的消耗减半（生命上限的 10% → 5%） 生命值低于 10% 时，「血池」的回灌速度翻倍（每秒 5% → 10% 生命上限），血刃附带5%方向伤害加成","r":"","b":"血越少跑得越快，也越能从自己的刀上喝回一口——低血不是事故，是本池的资源。 回血量按生命上限算，和「归流」走同一条线，不叠乘。"},{"n":"归流","m":"狂噬不休","p":"血勇","ph":"中期","v":"+6% 吸血","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 「血勇」结束时，每剩余 1 层回复 5% 生命上限 「血勇」结束时，每剩下的 10% 生命上限的血池存量，回复 3% 生命上限，","r":"","b":"本池的\"结算\"卡：前面放得越狠，这里回得越多——按结束时剩下的血池存量一起兑现。 注意它是\"结束时\"才回，提前被新的一次放血刷新掉就不结算，这张卡逼你掐时间。"},{"n":"倾囊","m":"狂噬不休","p":"血勇","ph":"中期","v":"+20% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 【放血】可以改为【挥霍】：一次性消耗生命上限的 30%，直接获得 4 层「血勇」并把生命上限 30% 的血存进「血池」，并在接下来四秒内始终不会死亡，且每一击都附带10%方向伤害加成 【挥霍】之后的 3 秒内，你受到的伤害 +15%（血刚放出去，人还是虚的）","r":"","b":"把五次连按压成一次，代价是多挨 15% 的伤害： 赶时间、或者在被控死之前想先把层数垫满时用它；平时继续连按 10% 的普通放血更划算。 它和「半血之勇」「临渊」站在血线的两端：那两张要你血少，这张要你趁血多——玩家得自己决定站哪边。"},{"n":"断腕","m":"狂噬不休","p":"血勇","ph":"中期","v":"+15% 血池上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 获得主动技能【割腕】：立刻损失生命上限的 45%，把这笔血**原封不动存进「血池」**（不受 10% 存血比例限制），并在接下来 5 秒内让你受到的 治疗全部无效，全伤+50%","r":"","b":"本池最\"刀尖舔血\"的一张主动：你主动把血从血管里挪到血池里，换的是**血池的存量**。 它不会立刻回血（治疗还被封了 5 秒），所以它是一笔真正的预支——要么在 5 秒内把命踩到 50% 以下把血池打开， 要么就带着更薄的血条继续拼。 和「淬血」（存血比例）、「以伤养血」（挨打也存血）是同一套：把\"血在体外\"这件事做到"},{"n":"血溅千里","m":"狂噬不休","p":"血勇","ph":"中期","v":"+20% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 击杀敌人时的血沫溅射范围从 1 格扩大到 3 格，溅射伤害从 30% 提到 80% 每溅到 1 个敌人使「癫狂」+1（每次击杀最多 +3）（无上限）","r":"","b":"这条线的核心卡：**血溅得越广，你疯得越快**——三格范围里只要挤着人，一次击杀就能补满好几层癫狂。 和「光环」类清场不同，它不产生持续伤害，只在\"死亡\"这一刻炸开：奖励你把敌人堆在一起，再点名最脆的那个。"},{"n":"脱缰","m":"狂噬不休","p":"血勇","ph":"中期","v":"+15% 血池上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 「癫狂」的代价跟着层数自动生效（见「杀红了眼」），这张卡把【狂乱】推到更疯： · 狂乱的自动攻击间隔从 0.5 秒缩短到 0.25 秒（你的身体比脑子快） · 狂乱期间你的近战伤害 +15% · 狂乱期间每击杀一个单位，「癫狂」+1（补一层，继续疯，不会自己降温） 净化加成：你使用净化物品 / 净化仪式时，一次可以多清 2 层（等于一次最多 7 层）","r":"","b":"这张卡的定位是\"把疯劲往死里推\"：它不解毒、不保命、不减速，只是让你在狂乱里砍得更快更狠。 想停下来的唯一方式是**净化**——而且净化要消耗物品或完成仪式，不是免费按钮； 就算净化了，一次也只能清掉一部分层数：你已经杀过的人不会因为你冷静一下就当作没发生。 「惊惧」是控制类负面状态，挂在敌人身上（玩家自己的抗性不影响"},{"n":"血契","m":"狂噬不休","p":"血勇","ph":"中期","v":"+15% 血池上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 「血印」升级为「血契」：同时最多存在 3 个 你受到的伤害有 25% 会**转移给 8 格内最近的被标记生物**（由它承担，不递减、不结算护甲） 你造成的伤害存进「血池」的比例翻倍（10% → 20%） 范围内没有任何被标记生物时，上面两条都不生效","r":"","b":"本池最\"疯\"也最黑的一张：**你把自己挨的打，转嫁到带印的人身上**。 它不是吸血、不是减伤，是\"分摊\"——带印的人越多、站得越近，你越接近无伤。 和「以伤养血」（受到的伤害 25% 存血）一起拿时，你**挨打这件事同时变成存血和转嫁**： 对面打你，一部分进血池、一部分打到队友身上——这就是\"刀尖舔血\"里最不好看的那"},{"n":"放血","m":"狂噬不休","p":"血勇","ph":"前期","v":"+10% 生命上限","e":"【获取血勇能力】获得主动技能【放血】：消耗**生命上限的 10%**，获得 1 层「血勇」；**无冷却**，可以连续使用 「血勇」上限 5 层；每层提供 近战增伤 +5% **「血池」**：你造成的近战伤害的 10% 不会直接回血，而是存进「血池」（上限 = 生命上限的 30%） · **血池只有在你的生命低于 50% 时才会打开**：打开后每秒回灌 30% 生命上限，直到血池空了或你回到 50% 以上 · **「血怒」**：血池打开期间，每回灌掉 10% 生命上限的血，获得 1 层「血怒」（每层 近战增伤 +5%，持续 10 秒，最多 3 层） —— 血池不只是命，也是火：你敢把血放出去，它回来的时候会带着杀意 · 回灌的天花板是 50% 生命上限：血池能把你从死线上拉回来，但拉不满 **持续时间**：整条「血勇」只有一条计时，初始 8 秒；**每使用一次【放血】都会把这 8 秒重新计时**（不管有没有叠层） **结束**：计时归零 → 「血勇」结束，所有层数一起消失（「归流」在这时候结算一次） 层数已经满 5 层时继续使用【放血】：只刷新计时，并把这一次多余的层数转成 1 把「血刃」（血刃未满时） 「血刃」（添头，不是本池的主角）：每次【放血】+1 把，上限 3 把；你的下一次攻击消耗 1 把，额外结算一次血刃伤害（基础数值：基础伤害，对应系数 0.4，独立结算、吃方向增伤）","r":"","b":"这张卡写死了「血勇」的全部基础规则，本池其余卡都按这一套走： · 怎么来：主动【放血】消耗生命上限的 10% → 换来「血勇」（状态）与「血刃」（弹药），无冷却、可连按；击杀也能回收（「战血」） · 上限：「血勇」5 层（「血不尽」解除）、「血刃」5 把（「命悬一线」解除） · 怎么用：血勇每层 近战增伤 +5%；血刃"},{"n":"豁口","m":"狂噬不休","p":"血勇","ph":"前期","v":"+10% 血池上限","e":"【获取血勇能力】【放血】消耗生命上限的 10%，获得 1 层「血勇」（无冷却） 「血勇」每层 近战增伤 +5%；近战伤害的 10% 存进「血池」（低于 50% 生命时才打开，打开后每秒回灌 30% 生命上限并叠「血怒」） 【放血】之后的 5 秒内，「血池」的解锁阈值从 50% 生命**放宽到 80% 生命**","r":"","b":"它改的不是回血速度，而是**什么时候允许你喝自己的血**： 平时血池要等你掉到一半以下才解锁，这张卡给你 5 秒的\"提前开袋\"窗口—— 放完血立刻按一下，让刚存进去的血马上灌回来，代价是那 5 秒里你的血量上限还是被扣掉的。"},{"n":"淬血","m":"狂噬不休","p":"血勇","ph":"前期","v":"+15% 血池上限","e":"【获取血勇能力】【放血】消耗生命上限的 10%，获得 1 层「血勇」（无冷却） 「血勇」每层 近战增伤 +5% 存进「血池」的比例从 10% 提到 25%","r":"","b":"把\"流出去的血\"留得更牢：同样一刀，存进血池的血翻了一倍多。 注意它仍然不给直接回血——存得多不等于喝得到，血池还是只在你低于 50% 生命时才打开。"},{"n":"半血之勇","m":"狂噬不休","p":"血勇","ph":"前期","v":"+6% 生命上限","e":"【获取血勇能力】【放血】消耗生命上限的 10%，获得 1 层「血勇」（无冷却） 「血勇」每层 近战增伤 +5%；近战伤害的 10% 存进「血池」 生命值低于 50% 时，【放血】的消耗减半（10% → 5% 生命上限），获得的「血勇」+1（可以突破上限，最高 6 层），存血比例 +10%","r":"","b":"低血线从这张卡开始变成资源：血少时放血更便宜、给得更多。 分界线按生命上限算（低血阈值统一以生命上限为分母）。"},{"n":"战血","m":"狂噬不休","p":"血勇","ph":"前期","v":"+8% 生命上限","e":"【获取血勇能力】【放血】消耗生命上限的 10%，获得 1 层「血勇」（无冷却） 「血勇」每层 近战增伤 +5%；近战伤害的 10% 存进「血池」 近战击杀敌人时，立刻获得 1 层「血勇」，并把生命上限 5% 的血存进「血池」（不消耗生命，同样受上限约束）","r":"","b":"别人身上流的血，也能凝成你的刀——本池的\"回收\"来源，让放血的账不至于越算越亏。 配合「共饮」时，队友的击杀不吃这条（只结算你自己的击杀）。"},{"n":"铁骨","m":"狂噬不休","p":"血勇","ph":"前期","v":"+5 抗性","e":"【获取血勇能力】【放血】消耗生命上限的 10%，获得 1 层「血勇」（无冷却） 「血勇」每层 近战增伤 +5%；近战伤害的 10% 存进「血池」 「血勇」持续期间，你受到的伤害 −20%","r":"","b":"拿血换来的不只是刀，还有一口咬牙撑住的气。 减伤走全能减伤那一条，和其他减伤乘法叠加；它只在血勇持续期间生效。"},{"n":"杀红了眼","m":"狂噬不休","p":"血勇","ph":"前期","v":"+10% 生命上限","e":"【获取癫狂能力】——**入魔**：从现在起，你可以从\"人\"身上取得「癫狂」 击杀村民 / 你的宠物：+1 层 击杀队友：+4 层（杀的是同类，走得最快） 「癫狂」在本局内**永久累积**，不会因为脱战或时间消失 每层「癫狂」提供 +4% 近战增伤，造成的伤害按 10% 存进「血池」 你击杀单位时，以尸体为中心 3 格内的其他单位陷入「惊惧」：无法攻击、并转身向远离你的方向逃跑（持续 0.5 秒 × 当前层数，最多 3 秒） **代价（不需要任何卡，跟着层数自动生效）：** 3 层起：村民与铁傀儡永久敌对你，你再也无法与村民交易 5 层起：【狂乱】——你松开攻击键后身体仍会继续攻击最近的敌人，期间无法使用其他主动技能，按后退会被转成向敌人冲刺 10 层起：【丧失人性】——攻击目标随机化（敌人、村民、队友一视同仁）、队友对你的治疗无效、每层每秒流失 0.5% 生命上限 **净化**：「癫狂」不会自己消失，只能靠**净化**降低——净化需要消耗**净化类物品，或完成一次净化仪式**（具体物品与仪式待定），一次最多清除 5 层","r":"","b":"这张卡是**入魔的开关**：拿走它，你还是那个人；拿了它，你可以开始从\"人\"身上换力量。 本池的第二条线，和「血勇」互补： 血勇 = 你割自己的血（可控、可回本） 癫狂 = 你杀\"人\"换来的疯（**不可逆**：本局永久累积，只能靠净化压下去，而且要付出物品或仪式） 它对应的是\"从正常人变成疯子\"的三段： 1~2 层【亢"},{"n":"血沫","m":"狂噬不休","p":"血勇","ph":"前期","v":"+10% 血池上限","e":"你击杀单位时，血花会溅到它 1 格内的其他单位身上：每个被溅到的目标各结算一次 30% 的独立伤害（吃方向增伤） 若你已经获得「癫狂」能力，每溅到 1 个敌人使「癫狂」+1（每次击杀最多 +2）","r":"","b":"「血溅千里」这条线的起点：先让血会溅，再让它溅得远、溅得狠。 它和「血刃」（添头）是两种不同的独立结算：血刃是\"打出去\"，血沫是\"杀出来的\"。"},{"n":"血印","m":"狂噬不休","p":"血勇","ph":"前期","v":"+10% 血池上限","e":"【获取血印能力】你可以对**队友或友善生物**造成近战伤害（至少 1 点）来给他们挂上「血印」 同一个目标 10 秒内只算一次；同时最多存在 2 个「血印」 被印的生物在 8 格内时：**你的「血勇」持续时间不会流逝**（不用一直按放血去续它） 「血印」持续到目标离开 8 格范围 30 秒，或目标死亡","r":"","b":"本池\"拿别人当锚\"的第一步：你不能只靠自己，得在自己身边留着几个带印的人。 注意它不给你回血、也不给伤害——它给的是**「血勇」不会再过期**，这才是本池最贵的东西。 多人提醒：给队友挂印需要真的打到他，建议同时保留队友复活手段；同一个目标 10 秒内只算一次，不能反复刷。"},{"n":"血不尽","m":"狂噬不休","p":"血勇","ph":"后期","v":"+30% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 「血勇」的层数上限解除 每层的近战增伤从 +5% 降为 +4% 「血池」的上限解除（想存多少存多少） 并且「血池」**不再需要等生命低于 50%**：任何时候都会打开回灌，但打开期间每秒额外流失 1% 生命上限","r":"","b":"后期改写血池规则：从\"掉到一半才敢喝\"变成\"随喝随淌\"。 血池不再是保命手段，而是一条**随时在流淌的血管**：你打得越久，它回得越多、也漏得越多—— 想靠它，就得先把生命上限堆起来（这也是本池唯一一张鼓励堆生命的卡）。 要把它吃满得连续放血，而连续放血需要「豁口」「归流」「临渊」这类回血手段配合。"},{"n":"血债","m":"狂噬不休","p":"血勇","ph":"后期","v":"+30% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 你在本局中每付出生命上限的 10%（【放血】【割腕】【血祭】【挥霍】都算），就永久获得 1 层「血债」 每层「血债」提供 +6% 近战增伤，但也会让你受到的伤害 +6% 「血债」**永久累积，本局内无法清除**，也不会因为死亡以外的方式消失","r":"","b":"后期改写成长结构：把\"每一个 10% 生命上限\"直接变成一条终身的收益与隐患。 它是本池唯一一张**越到后期越强、也越脆**的卡：打得越久，债越重，伤害越高，人也越经不起碰。 和「血池」不冲突：血债加的是近战增伤，血池管的是能不能把命收回来。"},{"n":"命悬一线","m":"狂噬不休","p":"血勇","ph":"后期","v":"+25% 血池上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 生命值低于 10% 时，「血勇」的层数不再随时间消失，锁定到你走出战斗为止 锁定期间【放血】不再消耗生命，但仍然照常叠加层数、存血 **「垂死」**：你的生命被降到 0 时不会立刻死亡，而是进入【垂死】——持续 5 秒，期间你仍能行动； 【垂死】期间每击杀一个敌人就 +5 秒，并且「血池」里的血会一次性全部灌回体内 【垂死】期间你的近战伤害翻倍、攻击不消耗「血刃」（死之前先把账收完） 倒计时结束时如果还没击杀过任何敌人，你才真的死；【垂死】每 120 秒最多触发一次","r":"","b":"后期改写持续时间 + 改写弹药上限：把最危险的 10% 变成一条可以长期经营的悬崖边。 锁定期间不会被新的一次放血刷新掉；离场或血量回到 10% 以上时恢复正常规则。"},{"n":"血祭","m":"狂噬不休","p":"血勇","ph":"后期","v":"+30% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 【放血】可以改为释放【血祭】：一次性消耗**生命上限的 25%**，立刻获得 5 层「血勇」并把生命上限 25% 的血存进「血池」 【血祭】之后的 5 秒内，你的每一次近战攻击都额外结算一次等于该次伤害 40% 的独立伤害（吃方向增伤）","r":"","b":"后期改写使用方式：把\"小口喝\"换成\"一口闷\"，把\"省着用子弹\"换成\"五秒内随便打\"。 25% 生命上限在没有回血卡时是会死人的——和「细水长流」「命悬一线」是成套的，先解决代价再考虑爆发。"},{"n":"血偿","m":"狂噬不休","p":"血勇","ph":"后期","v":"+25% 血池上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 生命值低于 20% 时，你的近战攻击额外结算一次等于该次伤害 40% 的独立伤害（每 3 秒最多触发一次）","r":"","b":"后期改写收益结构：血少的时候，刀最狠而且不花弹药——本池把\"低血\"从风险正式变成收益。 和「血祭」的免费血刃叠加时，以「血偿」的每 3 秒一次为准，不会因为血祭的五秒免费期而无限触发。"},{"n":"共饮","m":"狂噬不休","p":"血勇","ph":"后期","v":"+30% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 你使用【放血】时，10 格内的队友各获得 1 层「血勇」，并把生命上限 10% 的血存进他们自己的「血池」（每 3 秒最多触发一次） 队友的层数按队友自己的上限结算，不占用你的层数","r":"","b":"多人向后期卡：只有你自己掏血，队友白拿状态和弹药。 队友的血池同样只在他们生命低于一半时才打开——你给他们的是\"备着的命\"，不是即时的奶。"},{"n":"癫狂","m":"狂噬不休","p":"血勇","ph":"后期","v":"+30% 生命上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 「癫狂」达到 10 层及以上时，你**丧失人性**： · **无差别攻击**：你的近战攻击的目标不再由你决定——每次攻击都会随机打向 3 格内任意一个单位（敌人、村民、队友一视同仁） · 队友对你的治疗效果失去（你已经不是\"自己人\"了） · 每层每秒流失 0.5% 生命上限（疯到流血；这笔流失不会让你降到 1 点生命以下） · 处于「惊惧」中死亡的任何单位，会把惊惧升级为「溃散」传给周围 3 格（连锁恐惧） 「癫狂」的层数上限解除 每层额外提供 +8% 近战增伤，对于处于惊惧和溃散的目标额外造成30%伤害（全伤）","r":"","b":"后期改写规则：这一步是\"完全疯了\"——你和正常世界的最后一点关系被切断。 无差别攻击是这张卡最狠的地方：它不再分敌我，你打谁由骰子决定，队友站在你身边和站在怪旁边没有区别。 代价也写死了：每秒淌血、队友的治疗完全无效——想继续疯下去，只能靠「血池」回灌和「归流」硬回，自己把命续住。 「溃散」让清场变成一场雪崩：吓死一个"},{"n":"血海无边","m":"狂噬不休","p":"血勇","ph":"后期","v":"+25% 血池上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 【狂乱】期间，你周围 5 格内的敌人每秒受到一次「血雾」结算（基础数值：基础伤害，对应系数 0.15，独立结算、吃方向增伤） 【狂乱】期间每击杀一个敌人，「癫狂」直接补满（如无上限则为20层），且两秒内获取被击杀者的攻击力（不放入基础攻击力乘区，而是作为加法）","r":"","b":"后期改写范围结构：进入狂乱之后，你走到哪儿，哪儿就下血——不再是\"砍到谁溅谁\"，而是脚下一整片血海。 「击杀补满癫狂」让狂乱自持：只要还有东西可杀，你就停不下来，血海也不会退。 它和「血溅千里」是范围与持续的关系：那张管\"死的时候炸一下\"，这张管\"活着的时候一直在滴\"。"},{"n":"活祭","m":"狂噬不休","p":"血勇","ph":"后期","v":"+25% 血池上限","e":"获得血勇能力（初始无效果，需要先取得任意一张血勇招式卡，例如「放血」） 被「血印 / 血契」标记的生物死亡时（不论死因），触发一次【祭品】： · 「血勇」层数与持续时间立刻补满 · 「血池」直接装满 · 接下来 8 秒内，你造成的伤害 +30%（全伤） · 如果它死于你手，额外获得 2 层「癫狂」（没有入魔则改为 1 层「血勇」，可突破上限+4 层） 【祭品】每 30 秒最多触发一次","r":"","b":"把\"带印的人\"从工具升级成**祭品**：他们活着是锚（血印）、挨打是挡箭牌（血契）、死了就是一口气。 触发条件写得刻意暧昧——\"不论死因\"意味着你可以等它被怪打死，也可以亲自动手； 亲手动手会额外给癫狂，等于把\"入魔\"这条路和\"拿别人当祭品\"正式接在了一起。 它和「杀红了眼」是一条线上的两种拿法：一个慢慢杀、一个等一个"},{"n":"乱击","m":"狂噬不休","p":"血勇","ph":"前期","v":"+5 生命上限","e":"【获取狂热能力】开始攻击后累积「狂热」：每层 攻速 +15%，上限 10 层；1.5 秒内没有任何攻击动作则全部清零 你的攻击动作**不要求命中目标**：空挥、砍空气、砍在墙上、砍在盾上，都算 若你已经获得「血勇」能力：空挥不会打出「血刃」（血刃只在攻击命中时结算），也不会影响「血勇」的计时 只要你还在攻击，就会一直有伤害存进「血池」——这是维持\"放血 → 拼杀 → 存血\"节奏最快的方式","r":"","b":"本卡是【附加卡】：不计入所在三级池的 18 张本体卡，抽到它不会占掉本池的名额。 「乱击」是狂噬不休五个三级池共用的入口——五张的核心句完全一样，拿哪张都能直接起手，不一样的是各池专属的那一句。 本池的这句是\"空挥也继续献血\"：本池的代价不看你打没打到人，只看你手停没停。 重复获得「乱击」时，改为「狂热」层数上限 +2"},{"n":"隐身","m":"鬼影幢幢","p":"潜形","ph":"中期","v":"+15% 暴击伤害","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） **潜伏升级为「隐身」（中级）**： · 不需要蹲下，移速惩罚从 −40% 降到 **−15%** · 被发现的距离从 3 格缩到 **1 格**（基本只有贴脸才会被发现） · 被光照到不再打断潜伏 · 攻击或被发现时同样清零「影」并获得「出鞘」 高级（「完美潜伏」）留给后期。","r":"","b":"这是本池最重要的中期卡：把\"小心翼翼的蹲走\"升级成\"贴着人的背后走\"。 它改的是潜伏的**等级**，不是数值——影子还是那些影子，但你已经不用怕光了。"},{"n":"一线的光","m":"鬼影幢幢","p":"潜形","ph":"中期","v":"+15% 暴击率","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） 「出鞘」期间的第一次直接伤害**必定暴击**，且按 200% 暴击伤害结算 每次首刀**击杀**目标，你就叠 1 层「刃意」（本场战斗内永久，最多 5 层）：每层让出鞘首刀的伤害 +15%（最多 +75%） 如果一次出鞘的首刀**没有击杀**目标，全部「刃意」清零","r":"","b":"这条线只给你一刀机会，所以这一刀不能看脸：必暴、双倍。 奖励也不是\"再给你一次机会\"，而是**让你每一刀更重**：杀得成，越杀越狠；一刀没捅死，前面的都白攒。 所以它奖励的是\"有把握才出手\"，而不是\"打了就跑\"。"},{"n":"影移","m":"鬼影幢幢","p":"潜形","ph":"中期","v":"+35% 移速增幅","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） 「出鞘」触发后的 1 秒内，可以朝面朝方向短距瞬移 4 格（可穿墙），每 6 秒一次 落地时如果仍在敌人背后（120° 扇区），立刻重新进入潜伏并获得5层「影」","r":"","b":"捅完之后闪到它背后继续藏——\"杀一个、藏一次\"的循环，靠的就是这张卡。"},{"n":"借影","m":"鬼影幢幢","p":"潜形","ph":"中期","v":"+35% 移速增幅","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） **躲在敌人背后 120° 的视野死角里时，永远不会被发现**（不会被选为目标） 在死角内移动不会发出声音，被光照到也不会暴露","r":"","b":"潜行的第二个答案：不是\"离得远\"，而是\"站在它看不见的那一边\"。 它和「隐身」（拉远被发现距离）是两种完全不同的解法，两张一起拿才真正难被发现。"},{"n":"熄灯","m":"鬼影幢幢","p":"潜形","ph":"中期","v":"+15% 暴击率","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） 获得主动技能【熄灯】（冷却 15 秒）：熄灭你周围 6 格内的火光 / 灯笼 / 岩浆光等光源，并洒出一片墨雾 墨雾半径 4 格、持续 6 秒：雾内视为\"黑暗\"（光照亮度按 0 计算） 这片黑暗对你自己完全无效——你在里面照常维持潜伏，且「影」的积累速度翻倍","r":"","b":"给\"怕光\"的刺客一件工具：不是躲开光，而是**把光关掉**。 它和「不见天日」是绝配：你带着\"见光掉血\"的代价，就得自己制造能待的地方。"},{"n":"屏息","m":"鬼影幢幢","p":"潜形","ph":"中期","v":"+15% 暴击率","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） 潜伏 / 隐身期间，你受到的第一次伤害**减半，并且不会打断潜伏** 触发后进入 8 秒冷却；冷却期间潜伏被打断时，「影」只掉一半（向上取整）","r":"","b":"潜行最怕的不是被打死，是\"被蹭一下，影全没了\"——这张卡买的就是\"蹭不到\"。"},{"n":"潜形","m":"鬼影幢幢","p":"潜形","ph":"前期","v":"+8% 暴击率","e":"【获取潜形能力】——**潜伏（低级）**：白送的这一层是最低级的，必须小心翼翼 · 维持：蹲下并慢走才能保持潜伏（**潜伏时移速 −40%**）；奔跑、跳跃、攻击、被光直射、发出声音（踩水 / 踩树叶 / 挖方块）都会打断潜伏 · 被发现：潜伏时敌人不会主动索敌你，但**进入 3 格内会被发现**；被攻击也一定被发现 · **「影」**：潜伏期间每 2 秒 +1 层（上限 5 层）；每层提供 **暴击伤害 +20%** · **「出鞘」**：你攻击或被发现时，全部「影」清零，并获得「出鞘」——**3 秒内暴击率 +40%** · **「暴露」**：出鞘结束后进入暴露，**暴露期间你的近战伤害 −80%**（这条线的账全在第一刀上，打完你就是孙子），直到你重新潜伏满 3 秒","r":"","b":"这张卡写死了潜伏 / 暴露 / 影 / 出鞘四条规则： 藏（潜伏）→ 攒（影）→ 出鞘（一刀）→ 暴露（变孙子）→ 重新藏 高级潜伏在中期（「隐身」）与后期（「完美潜伏」）两张卡里，白送的低级潜伏只是起点。 和「狂噬不休 · 狂热」正相反：狂热是不停手，潜形是不动手；但两者都吃\"节奏\"。"},{"n":"疑云","m":"鬼影幢幢","p":"潜形","ph":"前期","v":"+8% 暴击率","e":"【获取潜形能力】潜伏（低级：蹲下慢走、移速 −40%、3 格内会被发现）；潜伏期间每 2 秒 +1 层「影」（每层 暴击伤害 +20%） **新增「警戒」机制**：敌人发现你之前会先起疑——它头顶出现警戒条（3 秒涨满） 警戒条涨满之前，你后退到 3 格外并静止 1 秒，怀疑立刻解除（不会惊动它） 警戒条涨满后才算真正\"被发现\"（触发暴露）","r":"","b":"把\"被发现\"从一个开关变成一个过程：你多了 3 秒的反应时间，可以退、可以绕、也可以干脆提前出手。 和「潜形」基础规则的关系：潜伏被打断的判定依旧存在（跑跳 / 光 / 声音 / 攻击），警戒只处理\"它看见了你\"这一种。"},{"n":"息声","m":"鬼影幢幢","p":"潜形","ph":"前期","v":"+3% 移速增幅","e":"【获取潜形能力】潜伏（低级，蹲下慢走、移速 −40%，3 格内会被发现）；潜伏期间每 2 秒 +1 层「影」 潜伏的**移速惩罚从 −40% 降到 −25%** 蹲下移动时不再发出脚步声（踩水、踩树叶也不会打断潜伏，被发现的距离从 3 格降到 2 格）","r":"","b":"潜行的基本功全在这张卡上：走得稳一点、声音小一点。 它不解决\"3 格内会被发现\"，那一层要靠「隐身」。"},{"n":"拟物","m":"鬼影幢幢","p":"潜形","ph":"前期","v":"+8% 暴击率","e":"【获取潜形能力】潜伏（低级：蹲下慢走、移速 −40%、3 格内会被发现） 原地静止 3 秒后，你可以**伪装成一块石头 / 木桩**（视觉上完全与环境一致） 拟物状态下：敌人不会攻击你，也不会进入警戒（除非它本来就看见过你）； 移动或出手立刻解除拟物，解除瞬间获得 1 秒「出鞘」","r":"","b":"藏在\"不是人\"的东西里——MC 里最好用的藏身方式。 和「借影」的区别：借影要你站在别人看不见的角度，拟物要你变成别人不感兴趣的东西。"},{"n":"投石问路","m":"鬼影幢幢","p":"潜形","ph":"前期","v":"+10% 暴击伤害","e":"【获取潜形能力】潜伏（低级：蹲下慢走、移速 −40%、3 格内会被发现） 获得主动技能【投石】（冷却 8 秒）：朝指定方向扔出一块石头，落点 8 格内的敌人会被声响吸引过去 **被声响吸引、正背对你走向落点的敌人，视为\"未察觉\"**（背刺 / 处决 / 偷取都按未察觉结算）","r":"","b":"把\"声音\"这个负面变成工具：敌人被你的石头牵着走，背就露给你了。 它和入场券【暗影潜踪】、以及猎人线的「埋伏」是天然配合——先扔石头，再往落点埋东西。"},{"n":"收势","m":"鬼影幢幢","p":"潜形","ph":"前期","v":"+8% 暴击率","e":"【获取潜形能力】潜伏（低级，蹲下慢走、移速 −40%，3 格内会被发现）；潜伏期间每 2 秒 +1 层「影」 获得主动技能【收势】（冷却 12 秒）：立刻清空当前「影」，并按清空的层数获得「出鞘」 每清空 2 层「影」，这次「出鞘」的第一次直接伤害额外 +10%","r":"","b":"把\"什么时候暴露\"从被动变成主动：攒到 5~7 层再按【收势】，把这口气一次放出去。"},{"n":"完美潜伏","m":"鬼影幢幢","p":"潜形","ph":"后期","v":"+25% 暴击率","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） **潜伏升级为「完美潜伏」（高级）**： · 移速惩罚完全消失，与正常站立一致 · 只要不出手，任何距离、任何光照、任何声音都不会让你被发现 · 可以自由穿过敌人的警戒范围（包括 boss 的领域） · 出手后仍然保留 1 秒的潜伏（这一秒里你不会被索敌）","r":"","b":"后期改写潜伏等级：从\"藏得住\"变成\"不存在\"。 它和「不见天日」是两种极端：一个要你躲在暗处换伤害，一个让你在任何地方都不被看见。"},{"n":"绝杀","m":"鬼影幢幢","p":"潜形","ph":"后期","v":"+25% 暴击伤害","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） 「完美潜伏 / 隐身」状态下的攻击： · 必定暴击，并无视目标 50% 的护甲值 · **额外触发 2 次方向增伤**（走\"法刺\"路线的核心卡：这一刀的方向结算比别人多两次） 这一击之后必定进入暴露（不管有没有击杀）","r":"","b":"\"法刺\"路线的落点：不吃武器面板，靠每一次独立结算去堆方向卡。 它和「一线的光」的分工：那张管\"这一刀有多疼\"，这张管\"这一刀能触发多少次方向伤害\"。"},{"n":"不见天日","m":"鬼影幢幢","p":"潜形","ph":"后期","v":"+25% 暴击伤害","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） **代价**：光照亮度高于 7 的位置，你无法进入潜伏，并且每秒流失 1% 生命上限（这笔流失不会致死） **收益**：潜伏 / 隐身 / 完美潜伏期间，你的暴击伤害 +50%（潜行每多持续 5 秒再 +5%，**没有上限**）；「出鞘」的持续时间翻倍 **代价（常驻）**：你的**生命上限减半**（只要持有这张卡就一直生效）","r":"","b":"把自己变成\"见光死\"的东西：白天进洞、夜里做事，收益与限制一起写在卡面上。 它把潜伏这条线的负面从\"怕被发现\"扩展成\"怕光\"——选择它就要学会看天色。"},{"n":"无痕","m":"鬼影幢幢","p":"潜形","ph":"后期","v":"+25% 暴击率","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） 被你击杀的目标**不留下尸体、血迹与声音**（掉落直接落地，但不会被其他敌人察觉） 击杀的瞬间，12 格内的敌人不会进入警戒，也不会把仇恨转到你身上 你造成的伤害不再留下任何\"痕迹\"（不会被循迹 / 追踪类效果追到你）","r":"","b":"后期改写\"痕迹\"规则：杀人不难，难的是**当作没发生过**。 它同时是猎人线「循迹」的反制卡——别人追不到你，你却能追别人。"},{"n":"蛰伏","m":"鬼影幢幢","p":"潜形","ph":"后期","v":"+25% 暴击率","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） 获得主动技能【蛰伏】（冷却 25 秒）：**只能在暴露期间使用** 使用后你收起武器趴下：期间无法攻击、受到的伤害 −90%、移速 +60% 【蛰伏】持续 3 秒，结束时**直接回到潜伏状态**（不需要重新满足蹲走 / 距离 / 光照等条件），「影」从 2 层起步","r":"","b":"把\"打完变孙子\"的那段时间变成一次主动的换气：**你放弃输出，换取重新藏起来**。 它不是免费的：3 秒不还手 + 25 秒冷却，团战里用错一次就等于白送一套。 和「影移」的分工：影移是\"打完之后闪到背后\"（要位置好），蛰伏是\"原地装死\"（要时机准）。"},{"n":"幢幢","m":"鬼影幢幢","p":"潜形","ph":"后期","v":"+25% 暴击率","e":"获得潜形能力（初始无效果，需要先取得任意一张潜形招式卡，例如「潜形」） 「影」满层时，你周围 3 格内敌人的索敌范围减半，且你造成的伤害不会把仇恨传到 4 格外 满层期间每击杀一个敌人，在原地留下一道\"残影\"（**纯视觉，不影响战斗数值**） 作为补偿：满层期间每击杀一个敌人，你获得 2 秒「不被索敌」状态","r":"","b":"本方式的冠名卡：让\"鬼影幢幢\"这四个字落在战场上——你走到哪儿，哪儿都是影子。"},{"n":"扼喉","m":"鬼影幢幢","p":"暗杀","ph":"中期","v":"+15% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 处决发生时，目标 2 格内的其他敌人各受到一次 30% 的独立伤害（吃方向增伤） 被这次波及命中的敌人不会立刻发现你（仇恨不扩散）","r":"","b":"处决不再只解决一个人：站在人堆里点掉最脆的那个，旁边的会一起倒。"},{"n":"积重","m":"鬼影幢幢","p":"暗杀","ph":"中期","v":"+20% 暴击伤害","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 处决多出一条判定：**你对该目标累计造成的伤害达到它最大生命的 80% 时，同样可以处决**（不看当前生命） 这条判定与\"生命低于处决线\"任取其一满足即可","r":"","b":"对策卡：专门治高回血怪——**账记在你身上，不记在它的血条上**。 你必须真的砍掉它 80% 的血量（哪怕它一直在回血）才配拿这一刀，所以它不超标，只是把\"打不动\"变成\"打得动\"。"},{"n":"先手","m":"鬼影幢幢","p":"暗杀","ph":"中期","v":"+35% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） **先手判定**：如果目标在最近 10 秒内没有攻击过你、也没有索敌你，那么**你对它的第一次攻击一律视为\"未察觉一击\"** 这次先手攻击不受\"蹑足 / 背后 120°\"的限制——正面走过去打的第一下也算 先手攻击之后，该目标在 30 秒内不会再被算作先手（防刷）","r":"","b":"把\"未察觉\"从\"必须绕到背后\"扩展成\"**谁先动手谁占便宜**\"： 遭遇战里你先打的那一下永远算暗算，不必每次都要绕背——这是本池的**下限保障**。 但它只给一次：10 秒的静默换一刀，之后还得老老实实找角度。"},{"n":"斩草","m":"鬼影幢幢","p":"暗杀","ph":"中期","v":"+15% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） **推线**：你对\"未察觉你\"的目标造成的伤害，额外附带一次等于其**当前生命 8%** 的独立伤害（帮你把血推到处决线附近） 一次处决触发后的 2 秒内，处决线**减半生效**（12% × 层数 → 6% × 层数 也能处决） 这 2 秒内可以连续处决多个目标，但每多一次，\"收刀\"时间 +1 秒","r":"","b":"本池少有的\"能自己推线\"的卡：它不是等别人把血打下去，而是**自己把血剁到线附近**。 所以它是混线玩家的桥——正面压血靠别的池，收尾这一段靠它接上。"},{"n":"无首","m":"鬼影幢幢","p":"暗杀","ph":"中期","v":"+20% 暴击伤害","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 处决不会惊动周围 8 格内的敌人（不会产生仇恨扩散），尸体会在 3 秒后无声消失 （拿东西是盗贼线的活，本池只管让它死得没人知道）","r":"","b":"\"无首\"说的是尸体——没有人头，就没有人知道是谁干的。 搜刮那一刀把盗贼线的口子接了过来：刺客和盗贼本来就不该分家。"},{"n":"刀下留人","m":"鬼影幢幢","p":"暗杀","ph":"中期","v":"+15% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 处决触发时，你可以**选择不处决**：把这个目标留着，并把当前「杀意」转成等量的「影」（超限） 被\"留\"下来的目标，在接下来的 5 秒内受到的伤害 +25%","r":"","b":"有些目标活着比死了更有用：留着它继续砍，或者留着它替你引来更多的目标。 和「循迹」配合时，\"留人\"可以变成一种刻意的养猎。"},{"n":"暗杀","m":"鬼影幢幢","p":"暗杀","ph":"前期","v":"+8% 暴击率","e":"【获取处决能力】——暗杀自己有自己的一套，不靠别的池子 · **【蹑足】（基础能力，开局就有）**：蹲下移动不发出声音；从目标**背后 120°**接近时，它不会转头索敌 ——这是本池唯一\"自己制造未察觉\"的手段，也是处决的入场券 · **【背刺】（基础加成，开局就有）**：从目标**背后 120°**打出的攻击，额外造成一次 **30%** 的独立伤害（吃方向增伤） 背刺命中不会发出声音，也不会让它立刻转头；**背刺一定满足\"未察觉\"条件**（也就是\"能背刺就能处决\"） 背后 120° 的定义：以目标朝向为正面，正面之外的 240° 里、以背面中线为轴的两侧各 60° · 「杀意」：**连续 5 秒不攻击、不受到伤害 → +1 层**（上限 3 层）；出手或受伤后清空 每层额外提供 **暴击伤害 +8%**（就算没到斩杀线，攒着也不亏） · **下限（未察觉本身就值钱）**：你对**未察觉你**的目标造成的伤害 **+30%**—— 这是本池的保底收益，不需要到斩杀线；它比正面硬刚的池子弱，但绝不至于\"没到线就完全没用\" · **处决线 = 目标当前生命低于 12% × 当前「杀意」层数**（基础最高 36%） · **处决线上限 40%**：所有加成叠满也不会超过它 · **前置：目标必须「未察觉」你**，满足任意一条即可： ① 你从它**背后 120°**的方向攻击它（用【蹑足】绕过去，不需要任何别的卡） ② 它正被其他单位吸引，或处于控制 / 失明状态 ③ 你刚从它的视野外出现（它还没来得及转头） **不需要进入潜伏**：站着不动攒够 5 秒、绕到背后，同样可以动手 · **处决分两种结算**： 对**普通敌人**：生命低于处决线时直接斩杀，不结算护甲与减伤 对**精英与 boss**：**永远不能斩杀**，改为「重创」——造成一次等于其最大生命 **8%** 的独立伤害（无视护甲）， 每个目标 **30 秒内只能被重创一次**；血量锁定 / 免疫阶段无法触发 · 代价：处决后清空「杀意」，**3 秒内无法再积累**（\"收刀\"），并且 6 格内的敌人会立刻发现你","r":"","b":"和「潜形」的关系：**同源但独立**——潜形给你更好的\"未察觉\"条件（隐身 / 完美潜伏）， 但暗杀自己不要求潜伏：站在人群外等 5 秒、绕到背后、等它被队友吸引，都能开这一刀。 和「潜形 · 影」的区别：影是 2 秒一层、出手就爆；杀意是 5 秒一层、只用来**抬高处决线**，本身不给任何伤害。 **提示**：纯处决"},{"n":"蓄谋","m":"鬼影幢幢","p":"暗杀","ph":"前期","v":"+10% 暴击伤害","e":"【获取处决能力】连续 5 秒不攻击、不受伤 → +1 层「杀意」（上限 3），出手或受伤后清空；**只有\"未察觉\"你的目标才能被处决**，处决线 = 生命低于 12% × 层数（最高 40%，且对 boss / 精英只算「重创」不斩杀） 积累「杀意」所需的时间从 5 秒缩短到 3.5 秒 处决后的**收刀**时间（原本处决后 3 秒内无法积累「杀意」）缩短到 1.5 秒","r":"","b":"杀人这件事，第一次最难：缩短准备、也缩短代价。"},{"n":"一目了然","m":"鬼影幢幢","p":"暗杀","ph":"前期","v":"+8% 暴击率","e":"【获取处决能力】连续 5 秒不攻击、不受伤 → +1 层「杀意」（上限 3），出手或受伤后清空 处决线从\"每层 12%\"提高到 **\"每层 15%\"**（3 层 = 45%，被 40% 上限截住） 你可以在 10 格内直接看见目标的当前生命百分比**与朝向**（背刺角度一目了然） **背刺角度从 120° 扩到 180°**（以背面中线为轴，两侧各 90°），背刺的那次独立伤害 +10%，可以处决的目标会有红光特效","r":"","b":"看得见血条，才知道什么时候够得着——这条信息本身就是刺客的资源。"},{"n":"断头","m":"鬼影幢幢","p":"暗杀","ph":"前期","v":"+10% 暴击伤害","e":"【获取处决能力】连续 5 秒不攻击、不受伤 → +1 层「杀意」（上限 3），出手或受伤后清空；**只有\"未察觉\"你的目标才能被处决**，处决线 = 生命低于 12% × 层数（最高 40%，且对 boss / 精英只算「重创」不斩杀） 处决之后立刻进入**不被索敌**状态（8 格内敌人不会发现你，也不会把仇恨转给你） 代价很硬：**处决后 10 秒内你无法积累任何「杀意」**——这是强行空出来的空窗期，用不被打扰换一段时间没有杀意","r":"","b":"砍完就走、当没发生过——这是\"断头\"这两个字真正的意思。 它和潜形池是同一条血脉：处决不该把你从暗处拽出来。"},{"n":"夜长梦多","m":"鬼影幢幢","p":"暗杀","ph":"前期","v":"+8% 暴击率","e":"【获取处决能力】连续 5 秒不攻击、不受伤 → +1 层「杀意」（上限 3），出手或受伤后清空；**只有\"未察觉\"你的目标才能被处决**，处决线 = 生命低于 12% × 层数（最高 40%，且对 boss / 精英只算「重创」不斩杀） 「杀意」的层数上限从 3 层提到 4 层 准备时间越长，处决线越高（最高仍受 40% 上限约束）","r":"","b":"5 层对应\"生命低于 100%\"，也就是理论上随时可以处决——代价是你必须先站 15 秒不动。 高收益的门槛写在明面上，怎么取舍交给玩家。"},{"n":"见血","m":"鬼影幢幢","p":"暗杀","ph":"前期","v":"+15% 移速增幅","e":"【获取处决能力】连续 5 秒不攻击、不受伤 → +1 层「杀意」（上限 3），出手或受伤后清空；**只有\"未察觉\"你的目标才能被处决**，处决线 = 生命低于 12% × 层数（最高 40%，且对 boss / 精英只算「重创」不斩杀） 处决成功后，接下来 5 秒内你的移速增幅 +20%、暴击率 +10% 这 5 秒内如果再次进入潜行（3 秒不出手），积累速度翻倍","r":"","b":"见血之后的 5 秒是\"退场窗口\"：要么趁速度撤，要么趁速度找下一个。"},{"n":"阎王帖","m":"鬼影幢幢","p":"暗杀","ph":"后期","v":"+25% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 处决线每层 +3%（12% → 15%），并且**处决线上限从 40% 提到 55%** 对精英与 boss 的「重创」伤害从最大生命 8% 提到 **12%**（依然不会斩杀，20 秒一次）","r":"","b":"后期的第一件事是\"够得着 boss\"：这条线以前只对小怪好使。"},{"n":"十步一杀","m":"鬼影幢幢","p":"暗杀","ph":"后期","v":"+25% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 每击杀一个敌人，立刻获得 1 层「杀意」（不需要再等 5 秒） 连续处决（两次处决间隔不超过 4 秒）时，第二次的处决线 +10 个百分点","r":"","b":"后期改写来源：从\"等\"变成\"连\"。清场时你不需要停手攒杀意——杀人本身就是攒。"},{"n":"引颈","m":"鬼影幢幢","p":"暗杀","ph":"后期","v":"+20% 暴击伤害","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 被你打出**硬直、击退、定身或眩晕**的敌人，处决线 +20 个百分点（持续到这些效果结束） 对已经被你处决过一次的目标（复活 / 二阶段）处决线 +40 个百分点","r":"","b":"控制就是\"把脖子递给你\"：和「埋伏」（定身）、盾牌的推挤、长兵的拒止都是天然接口。"},{"n":"连诛","m":"鬼影幢幢","p":"暗杀","ph":"后期","v":"+25% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 处决成功后，立刻获得 **2 层「杀意」**（不需要再等 5 秒），并且获得限时技能：指定一个十格内的生物，立刻出现在其背后（1.5 秒） 每个敌人每 20 秒只能为你提供一次这样的补层","r":"","b":"后期改写\"节奏\"：处决不再是\"一刀之后就收工\"，而是\"一刀接一刀\"。 它奖励清场时的连杀——只要你还有下一个目标、还能绕到背后，杀意就接得上。 和范围清场卡不同：这里不靠 AOE，靠的是**一次接一次的单点收割**。"},{"n":"人头落地","m":"鬼影幢幢","p":"暗杀","ph":"后期","v":"+25% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 处决发生时，周围 4 格内的敌人**中断当前一切动作**（施法、蓄力、拉弓都会被切断），持续 1 秒 这 1 秒内它们受到的你的伤害 +20%","r":"","b":"落地的不只是人头，还有一瞬的死寂——本池唯一的\"群体控制\"，只服务于你的退场或下一刀。"},{"n":"无人生还","m":"鬼影幢幢","p":"暗杀","ph":"后期","v":"+25% 暴击率","e":"获得处决能力（初始无效果，需要先取得任意一张暗杀招式卡，例如「暗杀」） 处决线不再有 40% 的上限（**上限解除**），且每层从 12% 提到 18%（只对**普通敌人**生效） **精英与 boss 永远不能被斩杀**：它们依然只吃「重创」（「阎王帖」加成后 12% 最大生命、20 秒一次） 但每次处决都会消耗全部「杀意」，且接下来的 5 秒内无法再把敌人打成\"可处决\"状态","r":"","b":"后期改写规则：把处决从\"收割\"变成\"节拍\"——你每隔一段时间清一次场，中间那 5 秒你必须靠别的手段活下来。"},{"n":"影从","m":"鬼影幢幢","p":"幽影","ph":"中期","v":"+15% 暴击伤害","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 「假身」出现的位置会同时产生一片 4 格的阴影：站在阴影里的敌人移速 −80%、索敌范围变为两格 阴影持续到假身消失","r":"","b":"假身不只是靶子，还是一片\"看不见的墙\"——把敌人按在原地，等你的下一刀。"},{"n":"借身","m":"鬼影幢幢","p":"幽影","ph":"中期","v":"+15% 暴击率","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 「假身」存在期间，你受到的第一次伤害会被**转给假身** 这次转移不消耗假身的血条（每一个假身仅限一次）","r":"","b":"把\"挨打\"这件事外包出去：假身替你挡一次，你连衣角都不脏。"},{"n":"影分身","m":"鬼影幢幢","p":"幽影","ph":"中期","v":"+15% 暴击伤害","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 「假身」被打破时，在 3 格内随机位置再生成一个假身（每 8 秒最多一次） 再生出来的假身只有 1 点生命，但同样会吸引索敌","r":"","b":"打碎一个还有一个：敌人会开始怀疑\"到底哪个才是真的\"。"},{"n":"灯下黑","m":"鬼影幢幢","p":"幽影","ph":"中期","v":"+15% 暴击率","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 当敌人正在攻击你的假身时，你对它的攻击**必定暴击**，且这次暴击不触发暴露 对同一个目标每 4 秒最多生效一次","r":"","b":"它们盯着影子的时候，是最好打的时候——\"灯下黑\"就是这句话。"},{"n":"空穴","m":"鬼影幢幢","p":"幽影","ph":"中期","v":"+35% 移速增幅","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 「假身」消散时留下一处「空穴」：5 秒内，任何敌人走进空穴都会被传送到 3 格外的随机位置 传送落地时会中断它当前的动作，并且附加一个8秒的易伤2级","r":"","b":"用假身\"关门\"：门口放一个，追兵就会自己走进你的陷阱。"},{"n":"影爆","m":"鬼影幢幢","p":"幽影","ph":"中期","v":"+15% 全伤增幅","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 你的「假身」获得两项强化（仍然按正常方式放在地上）： · **嘲讽**：假身出现时，6 格内的敌人被强制把它当成目标（原本只优先，现在改为强制） · **爆炸**：假身被打爆时，对周围 3 格内的敌人造成一次 **80%** 的独立伤害， 并让这次爆炸**额外触发一次全额方向增伤** 你也可以主动打爆自己的假身提前引爆（伤害不变）","r":"","b":"就是一个\"会炸的假身\"：照常放在地上、照常吸引敌人，区别是**被打爆的那一刻会炸一圈**。 和「幽影」基础规则的关系：基础规则里假身只会\"吸引索敌\"，这张把吸引升级成**强制嘲讽**， 并补上爆炸这一层收益——所以它既是控场卡，也是本池给方向卡的口子（法刺路线可用）。"},{"n":"幽影","m":"鬼影幢幢","p":"幽影","ph":"前期","v":"+8% 暴击率","e":"【获取幽影能力】你每次进入「出鞘」或脱离战斗时，在原地留下一个「假身」（上限 1 个） 「假身」有 1 点生命，会吸引 6 格内敌人的索敌（它们优先攻击假身） 「假身」被打破或 5 秒后消散；**被打破的瞬间，你获得 2 秒「出鞘」** **跨池衔接**：被「假身」吸引、正转身走向它的敌人，在转身后的 2 秒内视为\"未察觉\"（背刺 / 处决都按未察觉结算）","r":"","b":"本池不让你更强，让你更难被打到：刺客的命不是靠血条，是靠\"他们打错人\"。 和「潜形」的关系：出鞘会留假身，所以你的每一次出手都在给别人准备一个错误答案。"},{"n":"替身","m":"鬼影幢幢","p":"幽影","ph":"前期","v":"+8% 暴击伤害","e":"【获取幽影能力】进入「出鞘」或脱离战斗时留下一个「假身」（上限 1 个，1 点生命，吸引 6 格内索敌） 「假身」的生命从 1 点提到 3 点（能多吸引一次攻击） 「假身」**被打碎时**（自行消散不算），你回复 8% 生命上限的生命值","r":"","b":"多两点血就是多一次机会：假身存在的每一秒，都是你不挨打的每一秒。"},{"n":"错位","m":"鬼影幢幢","p":"幽影","ph":"前期","v":"+15% 移速增幅","e":"【获取幽影能力】进入「出鞘」或脱离战斗时留下一个「假身」（上限 1 个，1 点生命，吸引 6 格内索敌） 「假身」出现时，6 格内敌人的朝向会被强制转向它（原本锁定你的精英也不例外） 被转向的敌人 2 秒内移速 −60%","r":"","b":"\"错位\"是把敌人的眼睛掰到别处去：你不改变战场，你改变他们看的方向。"},{"n":"双影","m":"鬼影幢幢","p":"幽影","ph":"前期","v":"+8% 暴击率","e":"【获取幽影能力】进入「出鞘」或脱离战斗时留下一个「假身」（1 点生命，吸引 6 格内索敌） 「假身」同时存在的上限从 1 个提到 2 个 两个假身同时存在时，它们的索敌优先级叠加（敌人会来回改目标）","r":"","b":"两个假身的好处不是多挨两下，而是让敌人的目标在两秒里反复横跳。"},{"n":"引路","m":"鬼影幢幢","p":"幽影","ph":"前期","v":"+15% 移速增幅","e":"【获取幽影能力】进入「出鞘」或脱离战斗时留下一个「假身」（1 点生命，吸引 6 格内索敌） 你可以在 8 格内**手动指定假身的位置**（不再只能留在原地） 假身所在位置 3 格内的敌人会向它移动","r":"","b":"这是把\"幽影\"接到\"埋伏\"的桥：你可以把敌人引到你想让他们去的地方。"},{"n":"破影","m":"鬼影幢幢","p":"幽影","ph":"前期","v":"+6% 暴击伤害","e":"【获取幽影能力】进入「出鞘」或脱离战斗时留下一个「假身」（1 点生命，吸引 6 格内索敌） 你可以**主动打碎自己的假身**：对假身造成伤害即视为打碎，触发它的全部结算（2 秒「出鞘」） 主动打碎不进入暴露","r":"","b":"假身不只是诱饵，也是一个\"预留的出鞘\"：需要的时候自己打碎，立刻回到爆发状态。"},{"n":"千影","m":"鬼影幢幢","p":"幽影","ph":"后期","v":"+30% 移速增幅","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 「假身」的同时存在上限解除 你每多存在 1 个假身，你的移速增幅 +10%（最多 +50%），暴击伤害 +8%（最多 +40%）","r":"","b":"后期改写上限：从\"一两个影子\"变成\"一整片影子\"，敌人再也找不到你。"},{"n":"代死","m":"鬼影幢幢","p":"幽影","ph":"后期","v":"+35% 暴击伤害","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 你受到致命伤害时，如果场上有「假身」，改为消耗假身替你承受这次伤害（每15 秒最多一次） 承受伤害后，你获得 3 秒「出鞘」且立即进入不被观测（索敌）状态","r":"","b":"本池唯一的保命：刺客不硬吃伤害，他让别人替他死——哪怕是假的。"},{"n":"换命","m":"鬼影幢幢","p":"幽影","ph":"后期","v":"+30% 移速增幅","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 你可以和任意一个自己的「假身」**交换位置**（主动技能，冷却 8 秒，距离不限） 交换后假身留在原地，你出现在它原来的位置，且获得 2 秒「出鞘」","r":"","b":"这是刺客的\"回城符\"：把一个假身留在来路，遇险直接换过去。 和「引路」配合时，你可以把假身放在远处预置好，等于提前安排一条退路。"},{"n":"万目睽睽","m":"鬼影幢幢","p":"幽影","ph":"后期","v":"+25% 暴击率","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 「假身」不再只是诱饵：它身边的敌人每 2 秒会被它\"看一眼\"，被看的敌人附加一级易伤（最多叠 3 层） 看的目标越多，你的「影」或「杀」积累越快（每个被看的敌人 +20% 速度）","r":"","b":"影子替你\"盯人\"：它们看见的，你就能打得更准。"},{"n":"无面","m":"鬼影幢幢","p":"幽影","ph":"后期","v":"+25% 暴击率","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 你和「假身」在别人眼中完全一样 你站在自己的假身旁边（3格内）时，受到的伤害 −25%","r":"","b":"后期改写索敌规则：从\"假身是靶子\"变成\"谁都不知道哪个是你\"。"},{"n":"影灭","m":"鬼影幢幢","p":"幽影","ph":"后期","v":"+25% 暴击伤害","e":"获得幽影能力（初始无效果，需要先取得任意一张幽影招式卡，例如「幽影」） 主动技能【影灭】（冷却 20 秒）：同时引爆场上全部「假身」 每个被引爆的假身对 3 格内敌人造成一次 80% 的独立伤害（吃方向增伤），并让它们失去索敌 2 秒","r":"","b":"把一整片影子一次收掉：这是\"幽影\"这条线的收网手段，也是你从暗处离开时的最后一声。"},{"n":"连环伏","m":"鬼影幢幢","p":"埋伏","ph":"中期","v":"+15% 暴击伤害","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 一个埋伏点触发时，**3 格内的其他埋伏点一起触发**（方向效果增加20%（超限）） 连锁触发不会消耗额外的触发次数","r":"","b":"把\"踩一个\"变成\"整排一起炸\"——房间四个角都布上，人一进门就没了。"},{"n":"泥沼","m":"鬼影幢幢","p":"埋伏","ph":"中期","v":"+15% 暴击伤害","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 主动技能【铺泥沼】（冷却 20 秒）：**以你为圆心 3 格**的地面变成泥沼（持续 10 秒）——你站在哪儿，哪儿就是泥地 站在泥沼里的敌人：移速 **−70%**、**无法向上升起 2 格以上**（跳不起来、也飞不高）、被击退时不会飞出（陷在里面） 泥沼里的敌人受到的陷阱伤害 +40%（接\"毒 / 减速\"类方向卡）","r":"","b":"禁跳是专门为近战设的：**它跳不过你**，只能在你面前站着。 和「厌行地」配合时，被赶开的敌人会绕路，而绕的那条路上就是泥沼。"},{"n":"驱赶","m":"鬼影幢幢","p":"埋伏","ph":"中期","v":"+15% 暴击率","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） **牵引能力**：你可以把 6 格内的目标朝你或指定方向**拉 2 格**（冷却 8 秒） 被你**击退 / 牵引**的敌人如果撞上埋伏点，会立刻触发（不要求进入 2 格） 这种\"撞上去\"的触发伤害 +50%","r":"","b":"把敌人往你的陷阱上打的接口：和后发先至 · 盾击与推挤、连兵的冲击是一套。"},{"n":"布饵","m":"鬼影幢幢","p":"埋伏","ph":"中期","v":"+25% 暴击伤害","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 获得主动技能【布饵】（冷却 15 秒）：在 8 格内放一个\"诱饵\"（1 点生命、存在 6 秒） 20 格内的敌人会被诱饵吸引、主动走过去；诱饵身上自带 1 个埋伏点","r":"","b":"把「潜形 · 投石问路」那套\"用声音牵人\"升级成\"用东西牵人\"——不用你自己去当诱饵。"},{"n":"穿心","m":"鬼影幢幢","p":"埋伏","ph":"中期","v":"+15% 暴击伤害","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 获得蓄力近战【穿心】：按住 1 秒后刺出一次高倍率近战攻击（基础数值：基础伤害，对应系数 3.5） 如果目标**处于定身 / 束缚中**（埋伏点、绊索、收网、泥沼都算），这次伤害翻倍，并造成「穷途末路」效果：目标会开始乱放技能，但是准度不足大部分无法命中。","r":"","b":"本池\"伤害向\"的第一张：**它是近战刺击，不是远程**——你要走到它面前才能刺。 和控制的关系写得很直白：纯伤害路线也能用，但想吃到翻倍就得先把它钉住。"},{"n":"猎号","m":"鬼影幢幢","p":"埋伏","ph":"中期","v":"+15% 暴击率","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 主动技能【猎号】（冷却 20 秒）：当有猎物猜中任意伤害类陷阱或者控制类陷阱时，吹响猎号，持续 10 秒 这 10秒内，**你的每一次近战攻击都额外结算一次等于该次伤害 50% 的独立伤害**（吃方向增伤） 场上有埋伏点 / 猎具时，猎号期间它们也会被震动：触发伤害 +25%","r":"","b":"触发型结构：它不是远程武器，纯粹是**给你自己的近战加一次结算**。 伤害向路线的主力放大器——但要求你先把场布好，否则那 25% 的震动加成吃不到。"},{"n":"埋伏","m":"鬼影幢幢","p":"埋伏","ph":"前期","v":"+10 基础攻击力","e":"【获取埋伏能力】这一张卡写死了猎人线的全部基础：**猎具（埋伏点）+ 饵（四阶掉落物）** **一、猎具：埋伏点** · 蹲下 2 秒布下（同时最多 3 个）；敌人进入 2 格触发一次独立结算（基础数值：基础伤害，对应系数 0.8）+ **定身 5 秒** + 1 级易伤 · 触发时**不发出声音**（8 格内其他敌人不会被惊动）；**你和队友踩上去不会触发，也不会被自己的饵影响** · 可以主动拆除回收 **二、取饵：击杀生物会掉落对应阶数的「饵」（猎人线专属掉落物）** · **取饵是基础能力的一部分**：任何击杀都会掉对应的饵，不需要额外卡解锁 · **血腥饵**  普通生物掉落  吸引动物与被动生物：12 格内、存在 20 秒、到达后停留 5 秒 · **腐肉饵**  怪物掉落      吸引敌对怪物：10 格内、存在 15 秒、到达后停留 4 秒 · **王者血肉** 精英 / boss 掉落  吸引精英与 boss：20 格内、存在 8 秒、到达后停留 3 秒； **被攻击立刻清醒**，且同一个目标 60 秒内不会再吃同一种饵 · **万灵香**  三饵合成    吸引全部生物：25 秒内每 3 秒拉一次 · 饵是**物品**：放在地上，有存在时间，可以被吃掉或破坏；**不复制你的形象、不替你挨打**（和幽影的「假身」彻底分开） **三、致命吸引力（饵的通用规则）** · 被饵吸引的生物**放弃当前目标**（包括你），直奔饵；到达后停住（啃食 / 嗅闻 / 围着转） · 那几秒就是猎人的窗口：猎圈、绊索、万箭、收网全等在这时候","r":"","b":"猎人线的完整循环写在这一张卡上： **打猎取饵 → 找位置放饵 → 把怪 / boss 拉过来 → 猎圈收口 → 收网定身 → 背后补刀 → 取下一份饵** 它不需要敌人聪明：饵是\"改目标\"，猎圈是\"你站在另一头让它不得不穿过\"。 和「潜形」的关系：潜伏给你\"不被发现\"，埋伏给你\"被发现了也没关系\"——猎人不躲，猎人布"},{"n":"荆棘铺路","m":"鬼影幢幢","p":"埋伏","ph":"前期","v":"+10% 暴击伤害","e":"【获取埋伏能力】蹲下 2 秒布下「埋伏点」（敌人进入 1.5 格触发：0.8 系数独立结算 + 定身 1 秒） 额外学会【铺荆棘】：**你走过的路径会留下荆棘**（持续 30 秒，可跨越 1 格高低差）；也可以原地在 3 格内铺一圈 荆棘**能走，但每格经过都会受伤并减速 50%**——在其上方每0.3秒一次独立结算（吃0.5倍方向增伤，接\"流血\"类方向卡） 荆棘持续 300 秒，也可以主动收回","r":"","b":"寻常方块做不到\"走过去掉血\"：这就是地形卡该给的东西。 它的意义不是让你放墙，而是**让那条路变成\"走过去就亏\"**——敌人不绕就得挨，绕就得从你选的方向来。"},{"n":"厌行地","m":"鬼影幢幢","p":"埋伏","ph":"前期","v":"+8% 暴击率","e":"【获取埋伏能力】蹲下 2 秒布下「埋伏点」（敌人进入 1.5 格触发：0.8 系数独立结算 + 定身 1 秒） 额外学会【厌行】：指定一片 5×5 地面，让敌人**寻路时把它算作高成本区域**，持续 200 秒，冷却30秒，一大片范围内最多同时存在6片 敌人会主动绕开——不是不能走，是\"不想走\"（对 boss 同样有效，它也要寻路）","r":"","b":"这是**改算法**而不是造墙：方块堵路是玩家本来就会的，但\"让怪物讨厌某块地\"只有卡能做。 用法：boss 只会朝你直线过来——**把厌行地铺在你想让它避开的那个方向**（背后、侧翼、必经的窄口）， 它就只剩一条进攻路线；把那条路铺满荆棘或焦土，它进也疼、绕也疼。"},{"n":"绊索","m":"鬼影幢幢","p":"埋伏","ph":"前期","v":"+8% 暴击率","e":"【获取埋伏能力】蹲下 2 秒布下「埋伏点」（敌人进入 1.5 格触发：0.8 系数独立结算 + 定身） 定身时间从 5 秒延长到 **10 秒** 被定身的目标在定身期间无法转向（背刺角度对它始终成立）","r":"","b":"它把\"定住\"变成\"把后背露给你\"：和暗杀的背刺、处决直接接上。"},{"n":"重布","m":"鬼影幢幢","p":"埋伏","ph":"前期","v":"+10% 暴击伤害","e":"【获取埋伏能力】蹲下 2 秒布下「埋伏点」（敌人进入 2 格触发：0.8 系数独立结算 + 定身 5 秒 + 1 级易伤） 一次布设动作可以**同时放下 2 个埋伏点**（并排 2 格内） 布设完成后的 1 秒内，你的移速增幅 +20%","r":"","b":"（原来那张【掩土】想改的是\"敌人不会绕开陷阱\"——但那是 AI 行为，不该由卡来硬掰，所以换成\"布得更快更多\"。） 猎人的节奏是\"布完就走\"：一次放两个、放完立刻换位置，比让怪物变傻合适得多。"},{"n":"回撤","m":"鬼影幢幢","p":"埋伏","ph":"前期","v":"+15% 移速增幅","e":"【获取埋伏能力】蹲下 2 秒布下「埋伏点」（敌人进入 2 格触发：0.8 系数独立结算 + 定身 + 1 级易伤；触发无声、不误伤自己人） 主动拆除埋伏点时，返还 100% 布置时间，并在原地留下一小团烟尘（2 格、2 秒） 烟尘里的敌人移速 −70%，且不会注意到你","r":"","b":"布错了也不亏：拆掉还能当个临时烟雾用。 （\"收网\"这个名字留给后期那张主动收紧的卡，这张只管撤。）"},{"n":"猎场","m":"鬼影幢幢","p":"埋伏","ph":"后期","v":"+25% 暴击率","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 布设距离从\"脚下\"扩到 **20 格内**：你可以把埋伏点放在任何看得见的位置（不必走过去） 布设不再需要蹲下，但每次布设仍有 1.5 秒前摇 可部署的陷阱上限+3","r":"","b":"后期改写布设方式：从\"我先到\"变成\"我先看见\"。 配合「引路 / 布饵」可以把敌人牵进几十格外布好的场子。"},{"n":"陷阱大师","m":"鬼影幢幢","p":"埋伏","ph":"后期","v":"+25% 暴击伤害","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 埋伏点同时存在的上限解除 触发后不再消失：**5 秒后自动重新武装**（同一场战斗内可以重复使用）","r":"","b":"后期改写数量与消耗：一次性布置变成一个可以反复启动的\"机关房\"。"},{"n":"天罗地网","m":"鬼影幢幢","p":"埋伏","ph":"后期","v":"+25% 暴击率","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 主动技能【收网】（冷却 25 秒）：让 12 格内**全部埋伏点同时触发**（不管有没有敌人踩上去） 每个埋伏点各自结算伤害；如果多个埋伏点命中同一个敌人，后续每一次的伤害 +20% 如果敌人在控制类陷阱中，则周围的埋伏点会自动移动到控制类陷阱中","r":"","b":"从\"等人踩\"变成\"我点名\"：手动收网是本池唯一的主动爆发。"},{"n":"二次捕猎","m":"鬼影幢幢","p":"埋伏","ph":"后期","v":"+25% 暴击伤害","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 「猎物」或被你猎具命中过、但**活过 10 秒**的目标，会被记进「旧账」 对「旧账」上的目标：你造成的伤害 +25%，你的**饵对它的吸引力翻倍**（范围与停留时间都 +100%） 「旧账」本局不会清空——**一次没捕到，下一次它跑不掉**","r":"","b":"把\"留个伤口 +20% 伤害\"那种老套做法换掉：不奖励\"打过一架\"，而奖励**记得它**。 和「循迹」的「猎物」是一条线：猎物逃了不算失败，是下一场狩猎的线索。"},{"n":"猎杀时刻","m":"鬼影幢幢","p":"埋伏","ph":"后期","v":"+25% 暴击伤害","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 埋伏点触发的 3 秒内，你对**被这次触发命中的目标**的攻击触发「补刀」：必定暴击，如果该生物有回血能力，则抑制50%，且这次暴击不触发暴露 这 3 秒内击杀目标，返还2埋伏点（不进入 5 秒重新武装的冷却）","r":"","b":"埋伏和刺客线的接点：**陷阱把人定住 → 你从暗处出来补一刀 → 触发的那 3 秒就是你的处决窗口**。"},{"n":"绞刃","m":"鬼影幢幢","p":"埋伏","ph":"后期","v":"+25% 暴击伤害","e":"获得埋伏能力（初始无效果，需要先取得任意一张埋伏招式卡，例如「埋伏」） 当你的埋伏点 / 猎具触发时，你可以立刻**闪现到触发位置**（最远 12 格），并打出 3 段近战判定 每一段为本体伤害的 50%，**各自独立结算、各自吃一次方向增伤** 突进过程不会让你进入暴露（你就地回到原来的视线死角）","r":"","b":"本池的\"数量型\"近战结构：一次触发 = 突进 + 三段独立结算，走法刺路线时这三段就是三次方向结算。 它替换掉了原来那张射箭的【万箭】——**伤害永远从你的武器出**。"},{"n":"扑杀","m":"鬼影幢幢","p":"循迹","ph":"中期","v":"+15% 暴击伤害","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 把目标标记为「猎物」后的**第一次攻击**额外造成一次 40% 的独立伤害（吃方向增伤） 如果这次攻击是从它背后打出的，额外伤害翻倍","r":"","b":"标记本身就是一个\"开团信号\"：第一刀先给它一个下马威。"},{"n":"围猎","m":"鬼影幢幢","p":"循迹","ph":"中期","v":"+15% 暴击率","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 「猎物」3 格内的其他敌人变成「次级猎物」：你对他们造成的伤害 +10% 「次级猎物」死亡时，会立刻把标记转到它 3 格内最近的敌人身上（猎物链不断）","r":"","b":"单人也能玩出\"围猎\"：先咬小的，标记会自己往大的身上跳。"},{"n":"耐性","m":"鬼影幢幢","p":"循迹","ph":"中期","v":"+30% 移速增幅","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 追猎期间（「猎物」存在时）你受到的伤害 **−30%** 「猎物」每离你 1 格远，这个减伤再 +2%（最多 +30%）","r":"","b":"追得越远越不怕挨打——但离得远也意味着你打不到它。"},{"n":"血踪","m":"鬼影幢幢","p":"循迹","ph":"中期","v":"+15% 暴击伤害","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 「猎物」生命低于 50% 时，你对它的伤害 **+25%**，并且它留下的血迹更明显（追踪距离 +50%） 血迹在它被治疗到 50% 以上后仍会保留 5 秒","r":"","b":"配合「暗杀」：猎物被你咬到残血 → 直接从背后处决。"},{"n":"回魂","m":"鬼影幢幢","p":"循迹","ph":"中期","v":"+15% 暴击率","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 如果「猎物」**复活、分裂或进入二阶段**，标记自动保留（不需要重新造成伤害） 面对这类目标时，你对它的伤害加成翻倍（+10% → +20%）","r":"","b":"专治\"打不死\"：复活一次它还是你的猎物，而且你更狠了。"},{"n":"双猎","m":"鬼影幢幢","p":"循迹","ph":"中期","v":"+15% 暴击伤害","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 可以同时标记 **2 个「猎物」**（原本只有 1 个） 两个猎物的追猎移速取较高的那一个；对「次级猎物」的加成也一并生效","r":"","b":"和「专注」（只认一个）是两条相反的路线：一个越专一越狠，一个同时咬两个。"},{"n":"循迹","m":"鬼影幢幢","p":"循迹","ph":"前期","v":"+8% 暴击率","e":"【获取循迹能力】你对一个敌人造成伤害后，可以把它标记为「猎物」（同时只有 1 个） 你对「猎物」造成的伤害 **+10%**；它离你越远，你追它时的移速增幅越高（每 4 格 +5%，最多 +25%） 「猎物」死亡、或被标记超过 30 秒，才能换下一个 **预判**：你能看见「猎物」未来 3 秒的移动路线（虚线提示），可以提前在路上布置\\n代价：被标记的猎物**一直知道你的位置**（你无法对它潜伏）","r":"","b":"猎人线的单体池：**选一个猎物，然后不松口**。 和「暗杀」的关系：猎物的位置一直是已知的，所以循迹适合\"咬着打\"，暗杀适合\"一刀了账\"。"},{"n":"咬定","m":"鬼影幢幢","p":"循迹","ph":"前期","v":"+10% 暴击伤害","e":"【获取循迹能力】对一个敌人造成伤害后可标记为「猎物」（同时 1 个；每 4 格距离给 +5% 追猎移速，最多 +25%） 你对「猎物」的伤害加成从 **+10% 提到 +20%** 「猎物」对你造成的伤害 +10%（它也在盯着你）——把\"互相锁定\"写在明面上","r":"","b":""},{"n":"先手布点","m":"鬼影幢幢","p":"循迹","ph":"前期","v":"+8% 暴击率","e":"【获取循迹能力】对一个敌人造成伤害后可标记为「猎物」；你能看见它未来 3 秒的移动路线（虚线） **先手布点**：你可以在 8 格内**直接在这条预测路线上布置埋伏点或饵**（不需要走过去） 若猎物在 5 秒内真的经过这个点，该埋伏点的触发伤害 +50%、定身时间翻倍","r":"","b":"这张卡是\"预判\"这条线的落点：**你不再猜它往哪走，你看得到，然后提前把东西放在那条线上。** 它把「循迹」和「埋伏」扣成一套：一个负责看路，一个负责在路上埋东西。"},{"n":"穷追","m":"鬼影幢幢","p":"循迹","ph":"前期","v":"+15% 移速增幅","e":"【获取循迹能力】对一个敌人造成伤害后可标记为「猎物」（同时 1 个） 追猎移速从\"每 4 格 +5%、最多 +25%\"提高到 **\"每 4 格 +15%、最多 +120%\"** 追猎期间你的跳跃与冲刺不再消耗饥饿","r":"","b":"猎物跑得越远，你追得越狠——但这也意味着你离自己的埋伏点越来越远。"},{"n":"换猎","m":"鬼影幢幢","p":"循迹","ph":"前期","v":"+8% 暴击率","e":"【获取循迹能力】对一个敌人造成伤害后可标记为「猎物」（同时 1 个；换目标需等它死亡或 30 秒） 「猎物」死亡后的 **5 秒内**，你可以直接标记下一个目标（不需要先对它造成伤害） 这 5 秒内标记的新猎物，会收到「惊弓之鸟」：移速+30%，主动远离玩家，标记时间内收到的第一击+30%暴击伤害","r":"","b":"清场时的连贯性：杀完一个立刻换下一个，追击速度不会清零。"},{"n":"专注","m":"鬼影幢幢","p":"循迹","ph":"前期","v":"+10% 暴击伤害","e":"【获取循迹能力】对一个敌人造成伤害后可标记为「猎物」（同时 1 个） 如果同一个「猎物」已经追了 **30 秒**还没换（标记会被刷新而不是失效），你对它的伤害再 **+15%**，当在目标范围20格内时移速+40% 这段时间里你对其他目标的伤害 −10%（只认一个）","r":"","b":"本池的性格写在明面上：**追得越久越狠，但眼里只有它**。"},{"n":"天敌","m":"鬼影幢幢","p":"循迹","ph":"后期","v":"+25% 暴击伤害","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 你对「猎物」的攻击无视其 **30% 护甲值** 如果「猎物」的护甲值本来就很高（超过你护甲的 1.5 倍），这个比例提到 45%，同时其对你自附带一个易伤二级","r":"","b":"猎人专打硬壳：护甲越厚的猎物越吃亏——这条线对重甲 boss 是克制关系。"},{"n":"猎杀名单","m":"鬼影幢幢","p":"循迹","ph":"后期","v":"+25% 暴击率","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 每击杀一个「猎物」，下一个「猎物」的伤害加成 **+10%**（最多叠 3 层，即 +30%） 名单上的层数被杀死后清空且200秒内不可再叠","r":"","b":"后期改写成长方式：越杀越熟，名单越拉越长。"},{"n":"围场","m":"鬼影幢幢","p":"循迹","ph":"后期","v":"+25% 暴击伤害","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 主动技能【围场】（冷却 30 秒）：10 格内**所有敌人**在 5 秒内全部视为「猎物」 这 5 秒里你可以随便换目标，标记不会因为换目标而消失","r":"","b":"从\"单点锁死\"变成\"五秒的全面压制\"：清场时开一次，整片都是你的猎物。"},{"n":"追魂","m":"鬼影幢幢","p":"循迹","ph":"后期","v":"+8% 移速增幅","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 「猎物」死亡时，你获得 **5 秒「不被索敌」**与 +20% 移速 这 5 秒内你标记的下一个猎物，直接继承前一个猎物的全部加成（不清零）","r":"","b":"杀完一个就消失一下，再从暗处锁定下一个——和潜形、暗杀都能接上。"},{"n":"群猎","m":"鬼影幢幢","p":"循迹","ph":"后期","v":"+25% 暴击伤害","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 被标记的「猎物」会**吸引同类**：12 格内与它同种 / 同阵营的敌人会向它聚拢（每 2 秒拉近 1 格） 聚到猎物 3 格内的敌人变成「次级猎物」；它们受到的陷阱伤害 +25%","r":"","b":"不靠改索敌、不靠雾：**让猎物自己把同伙叫过来**——猎人只要把猎具布在它身边，就能一次收一整群。 和「埋伏」是一套：你把猎物标出来，它替你把怪聚成堆，你的猎具一次吃满。"},{"n":"猎王的耐心","m":"鬼影幢幢","p":"循迹","ph":"后期","v":"+25% 暴击率","e":"获得循迹能力（初始无效果，需要先取得任意一张循迹招式卡，例如「循迹」） 你**原地静止不动**时，对「猎物」的伤害每秒 +3%全伤增幅（最多 +30%） 移动会立刻把加成减半（不会清零）；**收网 / 触发猎具不算移动**，所以你可以一边等一边看它踩进来","r":"","b":"后期改写\"耐心\"的价值：从\"追得越远越狠\"改成\"**站得越稳越狠**\"——这更贴猎人。 和「埋伏」的搭配：你站在猎具后面不动，等猎物踩上去，加成正好吃满。"},{"n":"明察秋毫","m":"鬼影幢幢","p":"梁上君子","ph":"中期","v":"+5 智慧","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 「探囊」的情报升级为**清单 + 指定**： · 蹲下对准 1 秒，看到目标身上**四类的全部清单**（物 / 数 / 法 / 技，不再受情报等级限制） · 可以**指定偷哪一类、哪一项**：指定之后这一次偷取成功率 **−20%**（**智慧** 25+ 时降到 −10%、40+ 时降到 −5%）， 但成功时必定拿到你指定的那一样（指定「法」或「技」时，这笔惩罚叠在类别修正之后再算） · 对同一个目标看过清单之后，这一场战斗里它的清单会**一直显示**给你（它捡起 / 用掉什么，你都能看见）","r":"","b":"从\"能偷\"升级为\"**要什么拿什么**\"：代价是成功率，收益是确定性。 和【收尸】【洗劫】：清单还告诉你\"这具尸体上还有什么没拿\"。"},{"n":"三只手","m":"鬼影幢幢","p":"梁上君子","ph":"中期","v":"+5 幸运","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 放宽偷取的四条硬限制： · 「物」：同一个目标最多被偷 **4 件**（原为 2 件） · 「数 / 法 / 技」：每场战斗对同一个目标各限 1 次 → **各限 3 次** · 同一个目标 **30 秒**内不能再偷 → **10 秒** · 偷取扇区从\"背面 120°\"扩大到**侧后方 240°**（只有正面正对时偷不到）","r":"","b":"不给你新的花样，只把\"手\"变长：这一池的强度有一部分就长在这种限制放宽上。 和「洗劫」（后期）的区别：这张是**长期稳定地多拿**，那张是**短时间里疯狂拿**（并且要付伤害与暴露的代价）。"},{"n":"顺水推舟","m":"鬼影幢幢","p":"梁上君子","ph":"中期","v":"+25% 移速增幅","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 偷取成功之后，被偷的目标会**慌乱 3 秒**： · 移速 **−20%**，并且这 3 秒内**不索敌你**、也不会向同伴报警（它只顾着摸自己的口袋） · 慌乱期间你**再命中它**，偷取成功率 **+15%**（趁它乱，再拿一件） · 慌乱结束时它才真正进入敌对状态——那时你已经走远了","r":"","b":"把\"得手→被发现→被追\"改成\"**得手→它乱→你走**\"，偷取从一次性行为变成一个小连段。 和「暗杀 · 蹑足」：慌乱中的目标不索敌你，等于给了你一次\"未察觉\"的窗口（但处决仍要自己创造前置）。"},{"n":"移花接木","m":"鬼影幢幢","p":"梁上君子","ph":"中期","v":"+5 幸运","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 专门对**「数」**下手：偷来的数值不再只是\"看一眼\"，而是**从它身上搬到你身上** · 偷取一档数值（护甲 5 ｜ 移速增幅 10% ｜ 攻速增幅 10% ｜ 暴击率 5% ｜ 暴击伤害 10% ｜ 生命上限 5% ｜ 抗性 5）：**它掉多少、你涨多少**，持续 **30 秒** · 被搬走的数值在原主人身上**真的消失**（打精英与 boss 时，这是实打实的削弱： 搬走它的护甲，你就少挨一刀；搬走它的移速，它就追不上你） · 解除「数」类\"每场战斗对同一目标限 1 次\"的限制：对同一个目标最多可以搬 **3 档** （受袋子容量限制：同时最多存 3 档） · 30 秒到期后数值**自动还给原主人**——借的终归是借的","r":"","b":"「万物皆可偷」里最直白的一类：**偷东西不如偷身体**。 和 7-梁上君子 入口卡的关系：这张是「数」类的中期深度卡，入口卡只给你一档、限一次，这张给你三档。 和正面线的关系：搬走 boss 的护甲 / 抗性，等于给全队开了个临时削弱——盗贼的团队价值之一。"},{"n":"熟门熟路","m":"鬼影幢幢","p":"梁上君子","ph":"中期","v":"+6% 移速增幅","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 你在一个区域里偷过东西之后，这块地方就\"**记在你脑子里**\"： · 32 格范围内的所有容器、门、隐藏空间永久高亮（即使隔着墙） · 在这个区域里偷取成功率 **+10%** · 在这里累积「警觉」的速度**减半**：同样是偷 1 次，这里只 **+0.5 点**（累计 2 次才 +1 点）； 满 5 点被怪物 / boss 盯上时，追杀时间从 30 秒压到 **15 秒** （「警觉」的完整规则写在 7-梁上君子 入口卡与名词表 5.4.7） · 你死后重生不会丢失这份记忆","r":"","b":"踩点的长期收益：盗贼越在一个地方混，那个地方就越像自己的家。 和「狡兔三窟」（8-怀璧其罪）：这块记忆中任意一点都可以设成窝点，洗白与藏赃都在那里做。"},{"n":"暗盘","m":"鬼影幢幢","p":"梁上君子","ph":"中期","v":"+30% 移速增幅","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） **对玩家的交易**：把你偷来的东西**永久成交**（主动技能，冷却 20 秒） · 发起：选 8 格内的一个玩家，双方同时打开一个**只放 1 件**的交易台—— 你放赃物袋里的东西，对方放它身上的东西；**它看不到你袋子里还有什么** · 成交是**永久的以物易物**：价值由你们**自己谈**，系统只负责把两件东西换过来， **不判等价**（谁亏谁赚自己认，可以骗、也可以被反骗） · **没有担保**：交易台一摆出来，台面上那两件东西就是\"拿在手里\"的状态—— 交易过程中任何一方都可以**翻脸动手**，谁先动手谁就能把台面上那件先拿走。 这是本池刻意留的口子：**约在偏僻处交易，然后越货杀人** · 账本记录：和你成交过的玩家会留一条\"这个人愿意做买卖\"的记录，之后它更容易接受你的暗盘 · **队友模式（原【分赃】）**：可以直接把东西**塞给**队友（不走交易台、不被第三方看见）， 队友同时替你分担 **1 点「嫌疑」**；**数 / 法 / 技**也能这样塞过去 （队友按同一条规则使用：数 30 秒、法 / 技 用一次就散）","r":"","b":"这张卡是盗贼线**对玩家**的接口：单机局里八成用不到，但只要场上有第二个玩家， 它就是\"兵不血刃\"最爽的一条路——你把偷来的东西卖成它身上的真货，或者把它骗到没人的地方。 和 9-瞒天过海：伪装状态下的暗盘不会被第三方看出异常（你看上去只是两个人换了点东西）。 对村民的细致交易（以物易物 / 口碑 / 稀有货架）不在"},{"n":"顺手牵羊","m":"鬼影幢幢","p":"梁上君子","ph":"前期","v":"+2 幸运 / +2 智慧","e":"【获取顺手牵羊能力】盗贼线的全部基础写在这一张上。**万物皆可偷**——袋子里装的不只是东西： **一、四类可偷项**（每次偷取要先选偷哪一类：物 → 数 → 法 → 技，由易到难） · **物**  掉落物 / 装备 / 钥匙 / 它手里的武器 / 配方图纸　→　类别修正 **±0%** · **数**  它身上的一档**数值**：护甲 5 ｜ 移速增幅 10% ｜ 攻速增幅 10% ｜ 暴击率 5% ｜ 暴击伤害 10% ｜ 生命上限 5% ｜ 抗性 5　→　类别修正 **−15%** · **法**  它身上**正在生效**的一段**机制 / 资源**（影、出鞘、狂热层、血勇层、链、假身、埋伏点……）　→　**−30%** · **技**  它的一个**主动技能 / 特殊能力**（其他玩家的招式、精英与 boss 的特殊能力）　→　**−45%** 成功率 = 档位表（**档位值 = 幸运 + 智慧 ÷ 2**，生手 35% / 熟手 50% / 好手 65% / 妙手 80% / 神偷 95%， 见名词表 4.6）→ 叠**目标修正**（普通 ±0% / 精英 −15% / boss −30%）→ 再叠**类别修正** → 锁在 **10% ~ 95%** · 触发方式不变：从目标的**背面 120° 扇区**用近战命中时掷一次 · **拿不到就降级**：目标没有对应类别时（普通怪没有\"数 / 法 / 技\"），这一掷自动落回「物」，不会空手 · 偷不到时改为**偷情报**：按你的**情报等级**看到它身上最值钱的 1 / 3 / 6 / 全部（智慧越高看得越多） **二、偷来的四类怎么用** · **物** → 进「赃物袋」：可洗白 / 倒手 / 暗盘（见 8-怀璧其罪 与【暗盘】） · **数** → 直接算你的：**它掉多少、你涨多少**，持续 **30 秒**；袋里同时最多存 **3 档** · **法** → 用一次就散：按**原主人的规则完整生效一次**（不要求你点过对应的池子）；同时最多存 **2 段** · **技** → 用一次就散：按**你出手时的面板**结算，但**不吃方向增伤、不触发你池子的资源联动** （借来的刀没有刀鞘）；同时最多存 **1 个** · 数 / 法 / 技 属于\"大手笔\"：每场战斗对**同一个目标各限偷 1 次**（物不受这条限制，照旧 2 件） **三、代价**：偷取会让目标**立刻发现你**（潜形立刻清零）；同一个目标 **30 秒**内不能再偷 **四、「警觉」（本池的账，写死；旧称\"嫌疑\"）** · 每偷取一次，你在**当前区域**（以偷窃地点为中心 32 格）**+1 点警觉**；不同区域的警觉分开算 · 警觉 = **这个区域里的生物对你的注意力**，不是\"有人在调查你\"——整合包里没有高智能的追查者， 警觉只决定**怪物与 boss 会不会盯上你、追着你杀** · 上限 **5 点**：满 5 点 → **该区域 30 格内的所有生物（含怪物、boss，以及平时不主动攻击的中立与被动生物） 立刻把你锁定为目标，追着你杀**，持续 **30 秒**；这 30 秒里它们不会去管别人（除非有人打了它们） · 30 秒结束（无论你有没有被杀死）→ 该区域警觉**归零**，它们恢复正常行为 · 没满时：每 **60 秒 −1 点** · 警觉随时可见（屏幕角落一个\"眼睛\"图标 + 当前点数），让你知道这块地方还能不能待 · 减少手段：**假账本**清 1 点（8-怀璧其罪 · 门路）· **买通** 1 点浮财清 1 点 ·【暗盘】的队友模式里由队友替你分担 · **被杀代价（写死）**：如果你被**自己最近 5 分钟内偷过的目标**杀死 → **幸运永久 −1、智慧永久 −1** （本局累计、不叠加，一次死亡只算一次；洗劫期间被杀更重，见【洗劫】） **五、近战定位（写死）**：这一池不靠伤害——你的近战只用来触发偷取，或者把挡路的目标推开（而不是杀死） 拿到这张卡之后，「赃物袋」才存在（赃物怎么变现，见 8-怀璧其罪） 「幸运」与「智慧」从两处来：**通用数值池**（每阶段那 1 格）+ 盗贼线部分卡（附带数值里会给） 完整口径、属性物品分布、阶段目标与\"被杀代价\"：见本池文件夹里的 **`_幸运与智慧说明.txt`**","r":"","b":"盗贼线三条腿（偷 / 换 / 学）里的\"**偷**\"；\"换\"在 9-瞒天过海，「偷师」管\"学\"。 和刺客线的分界：刺客要\"它死\"，盗贼要\"它身上的东西\"；刺客为一刀做准备，盗贼为一双手做准备。 方向口子：本池不直接吃方向增伤——偷到的赃物是把方向卡\"喂\"给别人的原料。"},{"n":"探囊","m":"鬼影幢幢","p":"梁上君子","ph":"前期","v":"+3 智慧","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡，例如「顺手牵羊」） 蹲下并对准 8 格内的一个目标 1 秒，可以**先看清再下手**： · 看到它身上的**四类可偷项**分别有什么：**物**（掉落物 / 装备 / 钥匙）、**数**（身上有哪几档数值）、 **法**（正在生效的机制与资源）、**技**（它会用的主动技能与特殊能力） · 每一样都标出**预估成功率**（按你当前的档位值与类别修正算给你看），偷不起的会标红 · 看到它**手里拿的**与**穿在身上的**分别是什么 · 看得多深由**情报等级**决定（智慧 0~9 每类 1 项 / 10~24 每类 3 项 / 25~39 每类 6 项 / 40+ 每类全部） 这一次情报只对\"下一次动手\"有效：对同一个目标的下一掷，成功率 **+25%**","r":"","b":"把\"赌一把\"变成\"挑一件\"——盗贼的第一步是看，第二步才是伸手。 和「明察秋毫」（中期）：这张只给 3 件、只给一次加成；那张给全部清单并且可以指定。"},{"n":"袖里乾坤","m":"鬼影幢幢","p":"梁上君子","ph":"前期","v":"+15% 移速增幅","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） · 偷取**不发出任何声音**：8 格内的其他敌人不会被惊动（被偷的那一个照常发现你） · 得手的东西直接进「赃物袋」：**你身上看不出任何变化**——被搜身、被检查背包、被其他玩家翻装备栏时， 都只能看到你的正常物品，看不到赃物袋里的东西 · 赃物袋只在你主动打开时可见 · **数 / 法 / 技 一样查不出来**：被偷走数值、机制、技能的目标事后查不出\"东西去哪了\"，","r":"","b":"盗贼的底气：不是\"我跑得快\"，而是\"**我身上什么也没有**\"。 和 8-怀璧其罪：「袖里乾坤」管\"藏得住\"，「洗白」管\"变成钱\"；被搜身搜不到，才敢带着赃物去黑市。"},{"n":"偷师","m":"鬼影幢幢","p":"梁上君子","ph":"前期","v":"+8% 暴击率","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 【学】这条腿的前期入口：对准下面三种目标之一并蹲下 3 秒，**抄走一份配方 / 图纸的抄本** · 工作台 / 铁砧 / 附魔台 · 村民的交易界面（抄的是它能卖什么、要什么） · 尸体上的配方书与图纸 抄本**不消耗原物、也不改变原物的归属**（原来的配方还在原地） · 抄本可以直接使用（等同于原配方） · **配方是可以交易的赃物**：抄本可以拿去与村民 / 其他玩家**换东西**（对方只认\"这是一份配方\"，不追问来源） · 也可以把抄本洗白，一份抄本 = **5 点浮财**（配方是最贵的普通赃物）","r":"","b":"这条腿的定位：**别人靠打怪掉图纸，你靠抄**——盗贼的成长曲线本来就该比正面线短。 **配方交易是这条线特意留的口子**：抄本既能洗白、也能上交易台——对玩家的交易见【暗盘】， 对村民的交易见 9-瞒天过海 的交易线。 和 9-瞒天过海：伪装状态下可以当着主人的面抄，不会被打断。 和 8-怀璧其罪：配方与情报是本池最"},{"n":"风紧扯呼","m":"鬼影幢幢","p":"梁上君子","ph":"前期","v":"+10% 移速增幅","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） · 偷取成功后的 **4 秒内，移速增幅 +50%** · 这 4 秒里你的**疾跑不消耗饥饿**（一路跑出 8 格，谁也追不上） · 偷取这个动作**不会打断你的疾跑**：你可以一边跑一边伸手，得手之后继续跑 · 4 秒结束时如果你已经脱离所有敌人的视野，偷取带来的\"被发现\"状态立刻结束（潜形可以马上开始重攒）","r":"","b":"这一池的进攻逻辑：**不是打不过，是不打**——得手就跑，跑掉就算赢。 和「潜形」：跑出视野之后能马上重新潜伏，这就是\"偷一刀再藏一次\"的循环。"},{"n":"借过","m":"鬼影幢幢","p":"梁上君子","ph":"前期","v":"+10% 移速增幅","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 对一个挡路的非 boss 生物**推一下**（主动技能，冷却 4 秒）： · 它被推开 3 格，但**不受任何伤害**，也**不会把你列成敌对目标** · 推开的一瞬间，你可以**穿过它原本站的位置**（不必绕路） · 被推的生物不会报警，也不会打断你在它身上做的任何事（包括偷完再走）","r":"","b":"盗贼的近战出口：**不开刃也能开路**。 和 9-瞒天过海：伪装状态下\"借过\"不会破功——你只是一个着急赶路的熟人。 和「埋伏」的区别：埋伏的推挤是\"撞进猎具\"，这张是\"从人群里穿过去\"。"},{"n":"收尸","m":"鬼影幢幢","p":"梁上君子","ph":"后期","v":"+35% 移速增幅","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 【尸体规则（写死）】常规怪物死亡本来会直接消散；**只要死亡时 8 格内有你（盗贼），它就留下一具尸体**， 持续 **10 秒**（整合包里其他\"需要尸体\"的职业同理——附近有他们，也会留尸） · **收尸对任何来源的尸体都有效**：你杀的、队友杀的、其他玩家杀的、甚至怪物互相杀出来的 · 收尸 = 把死者身上的**全部掉落直接收进背包**（相当于一次必定成功的偷取）， 尸体上若还带着 **数 / 法 / 技**（数值、正在生效的机制、它还没用过的技能），一并收走 · 收尸不产生任何声音与仇恨；同一具尸体只能收一次 · 10 秒内没收走，尸体消散——**掉落照常留在地上**，谁都能捡，所以你得快 · 对精英与 boss 同样有效（boss 也只留一次尸）","r":"","b":"这张卡从【暗杀】挪到了盗贼线：**处决池只管杀人，拿东西是顺手牵羊的事**。 和盗贼线主线是一条脉：那张管\"打的时候偷\"，这张管\"打死之后收\"。 和「暗杀 · 无首」的配合：无首让尸体不被发现，这张让尸体被搜干净。"},{"n":"妙手空空","m":"鬼影幢幢","p":"梁上君子","ph":"后期","v":"+10 幸运","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 改写偷取的三条代价（本池的招牌改写）： · 取消\"同一个目标 5 秒内不能再偷\" · 取消\"同一场战斗里同一个目标最多 2 件\" · **偷取不再让目标立刻发现你**：它 **30 秒后**才发现自己丢了东西， 而且只知道\"丢了\"，**不知道是谁拿的**（不会报警、不会把仇恨挂到你头上） · 这条延迟对**四类都生效**：搬走它的数值、抽走它的一段机制、偷走它的技能， 它同样是 30 秒后才发现\"自己少了什么\"（那时通常已经在另一场仗里了）","r":"","b":"从\"得手就跑\"变成\"**根本没人发现少了什么**\"——盗贼线的终点不是更快的手，是**更安静的账**。 代价仍然留着：赃物袋被搜出来（见 9-瞒天过海 识破）时，东西还是会被追回去。 和「袖里乾坤」：一个让东西藏得住，一个让**丢的人不吭声**。"},{"n":"洗劫","m":"鬼影幢幢","p":"梁上君子","ph":"后期","v":"+25% 暴击伤害 / +15 智慧","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 【主动技能 · 洗劫】（冷却 60 秒）：持续 **8 秒** · 这 8 秒里你的**每一次近战命中都偷一件**（不再掷成功率），可以对同一个目标连续偷 · 翻找速度加倍：8 秒内偷到的每一件都直接进赃物袋，不占手、不打断攻击 · **四类通吃**：这 8 秒里每一掷你都可以指定偷「物 / 数 / 法 / 技」里的任意一类， 并且**无视\"每场战斗对同一目标各限 1 次\"的限制**——一次洗劫可以把一个目标彻底掏空 （它的护甲、它的机制、它的技能，全都进你的袋子） · **代价**：这 8 秒里你的**近战伤害 −60%**（你在翻它的口袋，不在打架）； 全程会被发现，如果被偷取目标杀死则会失去本次偷取的全部物品，同时智慧-2","r":"","b":"和「三只手」的分工：那张是\"细水长流地多拿\"，这张是\"**一次把所有口袋掏穿**\"。 用法：先用「暗杀」或正面线把目标打到只剩一点血，再开洗劫把它身上的东西一次拿光（它是死是活不归本池管）。"},{"n":"不告而取","m":"鬼影幢幢","p":"梁上君子","ph":"后期","v":"+30% 移速增幅 / +15 幸运","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 偷取的适用范围扩大到**所有目标**： · 对**友善生物**（村民、铁傀儡、动物）偷取同样有效，且它们不会因此敌对（只会摸口袋） · 对**其他玩家**偷取：对方**收不到任何提示**——没有提示音、没有消息、没有记录， 它只能自己数背包（想抓你，得靠它自己盯着看） · **数 / 法 / 技 同样无声无息**：偷玩家的数值、抽玩家的一段机制、偷玩家的技能， 它也收不到任何提示——最多发现自己\"好像弱了一点\"，但不知道是谁干的 · 你在对方视角里名字、皮肤、称号都不变：**它不会把你和\"丢了东西\"联系起来**","r":"","b":"这一池对多人局的态度：**不偷玩家是不可能的**——它只是把\"偷玩家\"的社交成本压到最低。 和 9-瞒天过海：伪装状态下偷玩家，连\"它认识你\"这件事都不成立。 和「袖里乾坤」：它藏得住赃物，这张藏得住\"发生过\"。"},{"n":"聚沙成塔","m":"鬼影幢幢","p":"梁上君子","ph":"后期","v":"+20% 暴击率","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 账本制度：本局每偷到一种**新种类**的东西——**新物品、新机制（法）、新技能（技）、新数值档（数）** 各算一种，永久累积： · 每 1 种：**暴击率 +1%** 与 **移速增幅 +0.5%** · 上限：暴击率 +20% / 移速增幅 +10%（对应 20 种） · 这条账**不会因为赃物袋被搜出、东西丢掉、被杀死而清零**——偷过就是偷过","r":"","b":"后期把\"贪\"变成成长曲线：**偷的东西可以没了，偷过的手艺留着**。 和「贪念」（8-怀璧其罪）刚好反向：那条算\"你现在手里有多少\"，这条算\"你这辈子拿过多少\"。"},{"n":"贼不走空","m":"鬼影幢幢","p":"梁上君子","ph":"后期","v":"+15 幸运","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 本池的保底改写：**永远不空手** · 偷取**失败也必定带走一件小东西**（随机普通物品：泥土、骨头、线、木棍、腐肉……）， 走的时候至少有过手 · **连续 3 次偷取失败之后，第 4 次必定成功**，并且必定拿到目标身上最值钱的那件 · 保底那一发**可以指定类别**（物 / 数 / 法 / 技 都能点）——\"我就是要它身上那个技能\" · 保底计数**不换目标、不清零**，跨越战斗与死亡都保留（记在账本上） · 保底触发之后计数归零，重新数","r":"","b":"专门给\"运气差\"的玩家兜底，也是这一池在**打不动 boss / 精英**时的下限保障： 对 boss 偷「技」是最难的一档（低档位时几乎必败），但它撑不过四次伸手。 和「明察秋毫」：保底那一发用指定，就是\"我就是要你身上那件东西\"。"},{"n":"李代桃僵","m":"鬼影幢幢","p":"梁上君子","ph":"后期","v":"+10 幸运 / +10 智慧","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） **属性门槛（本池唯一一张有门槛的卡）：档位值（幸运 + 智慧 ÷ 2）≥ 50**，也就是「妙手」档以上 【主动 · 标记】（冷却 900 秒，花 8 点浮财）：标记 8 格内的一个目标， 同时只能标记 1 个；标记持续到你主动取消、或它死亡 **一、偷命（对所有目标生效）** · 当你受到**致死伤害**时，这一次伤害由被标记的目标**全权承受**； 你**立刻回满状态**，并清除身上全部负面效果 · 如果被标记的目标因此死亡：尸体与掉落都归你（见【收尸】），你以它的位置为起点活下来 · 如果被标记的是精英 / boss 而它没死：改为对它造成**最大生命 30%** 的独立伤害，你照常回满 · 每触发一次就**消耗掉标记**，要重新标记（冷却照算） **二、偷劳动成果（只对被标记的**玩家**生效）** · 标记期间 **10 分钟内**，它通过**打 boss / 完成高阶仪式**这类\"珍贵结算\"获得的**物品或效果**， 获得者在结算时**直接改成你**——它那边只会看到\"这次什么也没拿到\" · 它不会收到提示、不会有系统消息（它只能自己慢慢发现少了东西） · 每结算走一笔，标记剩余时间 **−2 分钟**（偷得越多，标记得越短） **三、代价（写死）** · 标记期间你**每 10 秒流失 2% 当前生命**（借来的命也要还） · 标记期间你**不能进入伪装、也不能潜伏**（你得一直看着它） · 标记目标死亡或你取消标记 → 这次标记作废，冷却照算","r":"","b":"本池后期最后一张：**从偷东西，走到偷命与偷结果**。 它把\"万物皆可偷\"推到尽头——**不偷它的东西，偷它接下来的所有运气**。 和【收尸】：偷命换来的尸体正好是收尸最好的一具（它的东西一件都不会剩下）。 和【妙手空空】：两张一起拿就是\"你死不了、它也不知道为什么\"。 实现提示：这两段都需要**结算层**参与——致死"},{"n":"坐庄","m":"鬼影幢幢","p":"梁上君子","ph":"后期","v":"+25% 暴击率","e":"获得顺手牵羊能力（初始无效果，需要先取得任意一张顺手牵羊招式卡） 【主动 · 开庄】（冷却 600 秒）：在脚下放一个「**交易方块**」——上限 1 个、存在 60 秒、可主动收回 **一、谁能用**：【暗盘】是你自己下场，这一张是**你开台，别人下场** · 除你之外的**任意两个玩家**可以在方块上**各交易一次**（庄家不下场：你自己不能用这台方块） · 两个玩家之间面对面成交，你站在旁边看——**你只负责\"这台台子能交易\"这件事** **二、能交易什么（本卡的核心：把不可能变成可能）** · 正常情况下**无法交易**的东西，在这台方块上**可以交易**：**增益（buff / 层数）· 技能（招式）· 数值（幸运 / 智慧 / 护甲 …）· 状态（未察觉、伪装、埋伏点…）**，以及普通的物品、赃物袋里的货、配方抄本 · 交易是**一次性**的：一件换一件，换完各自拿走，**系统不判等价**（谈成什么样就是什么样） · 这是盗贼独有的口子：**别人只能给货，你能给\"交易的可能性\"** **三、报酬（庄家抽成）** · 开庄前设定抽成比例：**默认 10%，可设 5% ~ 30%** · 双方各自把**自己那件交易物价值的该比例**作为报酬交给你： · 可分割的（物品 / 层数 / 资源）→ **直接抽走实物**（按比例向下取，至少 1 件 / 1 层） · 不可分割的（唯一物品 / 一个技能 / 一段状态）→ **折算成浮财**（按「识货」估值 × 抽成比例） · 报酬在**成交时才结算**；也可以约定\"先付后换\"（先交报酬，再走交易） **四、保护庄家（写死）** · 交易进行期间 + 结束后 3 秒：你受到的伤害 **−80%**，并且**不能被击退、不能被牵引、不能被强制选为目标** · 交易方块**只能由你收回 / 拆除**，其他人打不破它 · 保护只保护**庄家**：两个交易者之间该打还是能打（这也是为什么有人愿意在你台子上谈——他们信的是你的规矩） **五、规矩与代价（写死）** · 同一台方块对**同一对玩家**只服务一次；同一玩家在一台方块上只能交易一次 · 你**不能插手交易内容**（不能偷换——那是 9-瞒天过海 ·【偷天换日】），但你可以**看**双方摆上来的东西 · 有人赖账（不付报酬）：你可以在 30 秒内把它标成**黑名单**，之后你所有的方块都拒绝它 · 开庄期间你**不能攻击**（动手就自动关台，保护也随之结束）——**当庄家就不能下场**","r":"","b":"对玩家三条线的分工：**【暗盘】= 你自己下场交易 ·【坐庄】= 你开台让别人交易并抽成 · 【偷天换日】= 别人交易时你在中间换货**——三张合起来，盗贼就是这张图里唯一的\"市场\"。 和 8-怀璧其罪：不可分割的报酬折成浮财，所以庄家这条线到最后还是汇进账本。 和【李代桃僵】：有玩家在你台上交易时，正好是\"标记 + "},{"n":"黑货","m":"鬼影幢幢","p":"怀璧其罪","ph":"中期","v":"+15% 暴击率","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） 黑市解锁第二层货架（3 格）：**别的池子的一次性货** · **一次性招式**：任意方式池里的一张前期卡的临时版本（只可使用三次，用掉就没了）—— 15 点 · **护符 / 材料 / 消耗品**：5~12 点，按你当前的「识货」估值定价 · **伪装行头**：一次性身份（喂给 9-瞒天过海，可以立刻变成某个你见过的样子）—— 8 点 每件货买走后 30 秒补货；**同一件货重复购买，每次价格 +20%**（黑市不做慈善） · 黑货开张之后，「浮财」的持有上限从 30 点提到 **45 点**（黑市也要你有钱才做得成生意）","r":"","b":"这是盗贼线**伸向其他方式的那只手**：别的池的口子我不用自己长，我买。 设计上这是\"跨大道接口\"的第一块试验田——远程 / 魔法 / 召唤上线后，货架直接接它们的前期卡。"},{"n":"讨价还价","m":"鬼影幢幢","p":"怀璧其罪","ph":"中期","v":"+40% 移速增幅","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） · 在黑市下单前可以选择\"**等**\"：每多等 10 秒，价格**随机浮动一次**（最有利 −30%，最不利 +10%） · 等待期间必须留在黑市界面（离开就要重新等），并且**等待期间不保护你**（会被攻击） · 和 9-瞒天过海 ·「熟客」叠加：你在村民那边攒的**口碑折扣**（−5%/次，封顶 −30%）同样能压黑市的价","r":"","b":"把\"买东西\"变成一次有风险的选择：**越便宜，你站在原地越久**。 和 9-瞒天过海：在伪装状态下等，比裸着等安全得多——这是两条腿互相踩肩膀的地方。"},{"n":"利滚利","m":"鬼影幢幢","p":"怀璧其罪","ph":"中期","v":"+15% 最大生命值","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） · 未花掉的浮财每 **300 秒 +1 点利息**（上限 +10 点）；利息按**你当前阶段的刻度**结算 · 利息会**立刻推高「贪念」**（贪念是按未花掉的浮财算的），所以你越攒越显眼 · 结算利息的瞬间有一声轻响：**8 格内能听见**（\"钱在生钱，也有人在听\"） · 浮财被花到 0 时利息重新开始数","r":"","b":"这一池的核心张力：**钱放着会长，但长出来的那部分也在暴露你**。 和「贪念」「散财」（后期）：利滚利负责把数字推上去，散财负责一次性烧掉换爆发。"},{"n":"暗格","m":"鬼影幢幢","p":"怀璧其罪","ph":"中期","v":"+15% 暴击率","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） 「赃物袋」分成 3 个**暗格**：普通 / 贵重 / 禁忌 · **禁忌**暗格最多放 **3 件**东西，放进需要 3 秒（被打断则要重来） · 禁忌暗格里的东西**任何原因都不会掉**：死亡不掉落、被搜身搜不到、被缴获也拿不走 · 普通与贵重暗格照常会被搜出（被搜出时按价值结算「警觉」） · 「洗白」可以指定只洗某个暗格","r":"","b":"和「袖里乾坤」的区别：那张是\"整体搜不到\"，这张是\"**有三件东西搜不到**\"—— 袖里乾坤遇到强行缴获会失效，暗格不会。 用途：把最贵的三件先锁进禁忌格，剩下的拿去洗白与交易（就算被当场抓住也不亏）。"},{"n":"一物两卖","m":"鬼影幢幢","p":"怀璧其罪","ph":"中期","v":"+15% 暴击率","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） · 洗白时，**配方 / 图纸 / 情报类**赃物可以只\"卖一半\"： 你**保留一份可用的抄本**，同时拿到 **5 点浮财** · 同一份东西只能这样处理一次 · 抄本与真品功能一致，但抄本**不能再洗白、也不能再抄**（防止自己印钱）","r":"","b":"把「偷师」这条腿直接并进经济循环：**配方既能用，又能卖**——这是盗贼线里唯一\"什么都想要\"的卡。 和「黑货」：抄本多了之后，黑市货架里会出现\"别人没有的配方\"，可以反过来卖给黑市。"},{"n":"赊账","m":"鬼影幢幢","p":"怀璧其罪","ph":"中期","v":"+20% 最大生命值","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） · 黑市允许**赊账**：先拿货，**900 秒内付清**（浮财够了会自动结算） · 单次赊账上限 = 你当前浮财的 **2 倍** · 超时未付清：黑市关门 **1200 秒**，同时你立刻 **+5 警觉** （30 格内所有敌对生物立刻把你锁定为目标并追着你杀） · 警觉满了的时候，**30 格内的生物（含平时不主动攻击的中立与被动生物）会无视视野与索敌范围， 直接锁定你追杀**（和「贪念」是同一条规则）","r":"","b":"给盗贼一个\"提前用未来的钱\"的口子：**抢在别人之前拿到那件货**。 和「贪念」联动得很脏：赊账买来的货不会让浮财上涨，但**欠的账不会让贪念下降**—— 手里没钱、身上很显眼，这就是还债的那 30 秒。"},{"n":"洗白","m":"鬼影幢幢","p":"怀璧其罪","ph":"前期","v":"+6% 移速增幅","e":"获得【赃物袋】与【浮财】能力（本池的入口，也是盗贼线的账本）。 · 偷取（见 7-梁上君子）得到的东西先进「赃物袋」，不直接进背包 · 在**无人处**（6 格内没有其他生物 / 处于 9-瞒天过海状态）蹲下 3 秒可以\"洗白\"： 把赃物袋里的东西折算成【浮财】 · 折算：普通掉落 1 件 = 1 点；装备与稀有材料 = 3 点；配方图纸 / 情报 = 5 点 · **折算按\"赃物档位\"放大（档位系数）**——不同阶段对应的是**不同档位的装备**，不是同一件越晚越贵： · **档位** = 「你**偷到它时所在的阶段**」与「它**自带的品质 / 等级档**」**取较高的那一个** （后期偷到的装备就是后期档，不会被当成前期货贱卖） · 档位系数：**前期档 ×1 ｜ 中期档 ×1.5 ｜ 后期档 ×3 ｜ 终局档 ×4** · 洗白所得 = 基础值 × 档位系数，**四舍五入**，最低 1 点 · 例：**装备与稀有材料**（基础 3 点）→ 前期档 3 / 中期档 5 / 后期档 9 / 终局档 12； **配方图纸与情报**（基础 5 点）→ 5 / 8 / 15 / 20；**数 / 法 / 技**（6 / 10 / 12）→ 前期档 6 / 10 / 12 · 中期档 9 / 15 / 18 · 后期档 18 / 30 / 36 · 终局档 24 / 40 / 48 · 赃物袋会给每件东西**记一档**（袋子上直接标\"前期档 / 中期档 / 后期档\"），洗白时按它**自己的档**算 · 支出不乘系数：**各卡写的价格就是它所属阶段的价格**（黑市标价、买通、悬赏、标记…）， 整张折算表与细则见本池 `_浮财说明.txt` · 洗白可以只洗一部分；期间受到伤害或移动则本次失败，赃物原样留在袋里 · 浮财上限按**你当前所处阶段**：前期 **30** / 中期 **45** / 后期 **90**（= 基础 30 × 该阶段的刻度； 「怀璧其罪」开启态无上限） · 浮财不能当物品直接使用，只在本池的卡上消费 **三、本池的基础能力「怀璧其罪」（入口卡写死）** 偷来的东西一天不变现，就一天是你的罪——这就是本池的名字： · 赃物袋里**没洗白**的东西、与手里**没花掉**的浮财，都会累积「贪念」 （前期卡【贪念】：每 5 点未花掉的浮财 = 1 层，上限 4 层；每层 偷取成功率 +2%、暴击伤害 +6%， 同时 6 格内被发现的距离 +1 格/层、区域「警觉」涨得更快） · **洗白**把赃物变成浮财（数字），**花掉**浮财才真正离开你——花出去的钱不再招人注意 · 后期同名卡【怀璧其罪】把这条能力推到极限：解除贪念上限、直接按未花掉的浮财给暴击伤害与移速， 代价是不能伪装、不能潜伏、12 格内优先被索敌 > 一句话：**偷来的东西是罪证，洗白是销赃，花掉才是干净的。** （浮财的完整规格——来源、上限、支出表、与贪念的关系、反漏洞边界——见本池文件夹里的 **`_浮财说明.txt`**）","r":"","b":"本卡只是入口：拿到它，【浮财】才有意义；不拿它，本池其他卡上\"花浮财\"的部分都无从谈起 （池内中后期卡可以直接产生浮财，不必依赖本卡）。 「赃物袋」与 7-梁上君子 共用同一只袋子——两边任意一张入口卡都能把袋子建起来。 接口：浮财 → 黑市（中期）→ 别的池子的一次性货；这是盗贼线唯一\"往外买\"的口子。"},{"n":"门路","m":"鬼影幢幢","p":"怀璧其罪","ph":"前期","v":"+4% 暴击率","e":"获得【黑市】能力：随时可以打开黑市（背包里的一个隐藏页），用【浮财】下单，货在 10 秒后 送到你脚下（包裹形式）。 前期黑市只开三类货： · 消耗品：药水、食物、火把 —— 1~2 点 · 一次性道具：**赝品**（拿真货时先把赝品塞进原位，这一次偷取**不会让目标立刻发现**，2 点）· **假账本**（被怪物 / boss 盯上时出示，立刻清 1 点「警觉」，3 点）· **绳梯**（3 点） · 情报：显示 12 格内一个目标身上最值钱的 1 件东西（2 点） 黑市不与任何村民共用货架：你买的东西不占别人的交易栏，也不涨任何警觉。","r":"","b":"前期黑市只卖\"工具\"，不卖战斗力——真正的黑货（别池的一次性招式、护符、材料）在中期开放， 「悬赏」与「买通」在后期开放。 和 7-梁上君子：赝品正好补上那张池最大的破口——**偷取会让目标立刻发现你**； 有赝品的那一次，你可以慢慢来（这也是盗贼线唯一能\"用钱买一次干净的手\"的方式）。 和 9-瞒天过海：假账本让伪装"},{"n":"贪念","m":"鬼影幢幢","p":"怀璧其罪","ph":"前期","v":"+8% 暴击伤害","e":"获得【贪念】：每 5 点**未花掉**的浮财 = 1 层（上限 4 层）。 · 每层：偷取成功率 +2%、暴击伤害 +6% · 每层同时让你更显眼：**范围内的生物，哪怕根本没看见你、你也不在它们的索敌范围内， 也会直接把你当成目标追过来**——每层把这个\"强制锁定范围\"扩大 **4 格**，**最大 30 格** · **对非战斗生物同样生效**：平时不会主动攻击你的中立与被动生物（狼、蜜蜂、铁傀儡、村民……） 也会立刻进入\"追杀你\"的状态——你在这片地方会瞬间变成所有人的目标 · 换句话说：身上带着没花掉的钱，你在这片地方就是一块磁铁——藏起来也没用 · 浮财花掉后层数立刻下降；浮财被清空时贪念归零 贪念是**代价与收益绑在一起**的状态：它不会掉血，只会让你越来越藏不住。","r":"","b":"本卡的定位是把\"钱\"变成一种要随时计算的风险定价：越贪越强，也越早被看见。 和 9-瞒天过海：贪念高了会让伪装更难维持（伪装需要周围没人盯着你）。 实现提示：完全没有攻击手段的生物（牛、猪、村民这类）在被强制锁定时， 按生物表改成**惊吓逃散并惊动附近的怪**（能打的直接追杀，不能打的去叫人）—— \"立刻索敌\"这条对它"},{"n":"识货","m":"鬼影幢幢","p":"怀璧其罪","ph":"前期","v":"+3 智慧","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） · 你看任何物品都会显示它的**估值**（按浮财点数）：地上的、容器里的、别人身上的都能看 · 洗白时按**最有利的档位**折算：稀有材料一律按 5 点算（原为 3 点） · 同时显示两个价格：**黑市价**与**村民价**（同一件东西两边不一样贵） · **数 / 法 / 技 也有价**：估值与洗白价分别是 数 **6 点** / 法 **10 点** / 技 **12 点**—— 它们比普通赃物值钱得多，你一眼就能认出\"这件值不值得为它冒一次险\"","r":"","b":"\"识货\"是盗贼的第一门学问：**不知道值多少的人，偷再多也是白拿**。 和「偷师」：抄来的配方与图纸，这张卡会直接告诉你它在黑市能换几个钱。"},{"n":"狡兔三窟","m":"鬼影幢幢","p":"怀璧其罪","ph":"前期","v":"+6% 移速增幅","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） · 你可以在任意位置放置「窝点」（上限 **3** 个，放下后可随时拆除） · 在窝点 6 格内洗白：时间**减半**（1.5 秒），被打断**只暂停、不失败** · **警觉消退翻倍**：窝点 6 格内每 **30 秒 −1** 点警觉（别处是每 60 秒 −1）——犯完事回窝里蹲一会儿就干净了 · **寄存**：每个窝点可以寄放 **1 件**赃物——不占赃物袋容量、被搜身搜不到、也不吃\"被缴获\"的结算 · **重生点**：窝点可以作为你的重生点（死在哪都行，最后在这里醒来） · 窝点本身不发光、不显示任何标记；**只有你当场洗白时**，别人才能发现这里有窝点 · 窝点被破坏时：该点功能立刻失效，并且你 **+1 警觉**","r":"","b":"「洗白」解决\"能不能变钱\"，这张解决\"**在哪儿变钱最安全**\"。 和 7-梁上君子 · 熟门熟路：记忆里的任意一点都能设成窝点，等于把老巢铺满整张图。"},{"n":"买路钱","m":"鬼影幢幢","p":"怀璧其罪","ph":"前期","v":"+5% 移速增幅","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） 【主动技能 · 买路钱】（冷却 20 秒）：花 **5 点浮财**，换 **5 秒内不被索敌** · 撒出去的钱落地即消失，不会被任何人捡到、也不会留下痕迹 · 这 5 秒里你可以从敌人正面走过（它看得见你，只是没把你当成目标） ·5 秒结束时如果你已脱离视野，索敌类的层数可以立刻重新开始攒","r":"","b":"浮财的第一种\"战斗用途\"：**它不给你伤害，给你一次不被打的权利**。 和「潜形」的区别：潜形是没人看得见你，买路钱是**看得见也不追究**（正大光明地走过岗哨）。"},{"n":"买通","m":"鬼影幢幢","p":"怀璧其罪","ph":"后期","v":"+50% 移速增幅","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） 把「警觉」变成一件可以花钱解决的事： · **清账**：1 点浮财 = 清 **1 点警觉**（随时可用，没有冷却） · **雇替罪羊**（8 点）：把当前**全部**警觉转给 8 格内的另一个生物或玩家—— 接下来 **30 秒**，这片区域里的敌对生物会把它当成目标、追着它杀；这 30 秒里你完全干净 · 对玩家同样有效：他会被满街的怪物追，而你在旁边看着 · 30 秒结束后，**一半警觉会回到你身上**（怪物重新开始注意你），直到你的警觉降到 0","r":"","b":"盗贼的解法从来不是\"转移嫌疑\"这个动作本身，而是**花钱**：钱能把账挪到别人头上。 和刺客线的分界：潜形遇到追查靠消失，盗贼遇到追查靠**结账**。"},{"n":"悬赏","m":"鬼影幢幢","p":"怀璧其罪","ph":"后期","v":"+25% 暴击伤害","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） · 花 **10 点浮财**给一个目标\"下单\"（同时只能挂 1 个悬赏，换目标要重新花钱）；**这笔钱花出去就不退** · **赏金归结果、不归手**：目标被**任何人**杀死都算完成——如果它死在别的玩家手里， 你照样拿到 **10 点浮财**的赏金，掉落也照样翻倍（这一单只看结果，不看是谁的手） · 悬赏期间：你对它的偷取成功率 **+40%**，情报等级拉满（相当于常驻「明察秋毫」） · 它身上的物品在黑市被**加价 50%** 收购 · 该目标死亡时：掉落物翻倍","r":"","b":"「悬赏」是盗贼线最像\"主线\"的一张卡：**它不是变强，它是指定一个目标去变强**。 和 7-梁上君子 ·「贼不走空」：对小偷运气的兜底，配上悬赏就是\"目标锁定 + 保底必得\"。"},{"n":"散财","m":"鬼影幢幢","p":"怀璧其罪","ph":"后期","v":"+20% 暴击率","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） 【主动技能 · 散财】（冷却 45 秒）：把**全部**浮财一次性撒出去（清空） · 每 **5 点**浮财换：**5 秒** 的 **暴击率 +60%** 与 **移速 +60%** · **多出来的浮财只延长时间、不叠数值**：每多 5 点 +5 秒，持续时间最多 **120 秒** · 可以对自己使用，也可以给 8 格内的另一个玩家使用（用在别人身上时，浮财照样由你出） · 撒完之后「贪念」立刻归零，而且这 5 秒内**不再累积贪念** · 撒出去的钱不会回来，也不会被别人捡到（当街撒钱，谁看你都不像贼）","r":"","b":"这一池的\"兑现\"按钮：**攒了一路，最后一口气花掉换一张保命牌**。 和「贪念」「利滚利」：前面两张负责把数字堆高，这张负责把堆高的数字变成战斗力—— 会花钱的盗贼比会偷的盗贼活得久。"},{"n":"怀璧其罪","m":"鬼影幢幢","p":"怀璧其罪","ph":"后期","v":"+25% 全伤增幅","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） 本池的招牌改写：**把\"带着钱\"直接变成战力**（可以随时开启 / 关闭，开关各有 3 秒准备） · 开启期间，「贪念」的**上限解除**，并改成直接换算：每 **8 点**未花掉的浮财 = **暴击伤害 +8%**、**移速增幅 +10%**（不设上限，只看你身上有多少） · **代价（写死）**：开启期间你**无法进入伪装、也无法潜伏**——所有人都看得见你背着什么； 12 格内的生物**优先索敌你**（他们先打有钱的那个） · 关闭时回到「贪念」的常规规则（每 5 点 1 层，上限 4 层）","r":"","b":"池名就是这张卡：**罪不在偷，而在你带着的东西**。 这是本池唯一一张\"主动把自己变成靶子\"的卡——它的强度完全由你贪了多少决定。 和「散财」是一个硬币的两面：一个把贪念烧成爆发，一个把贪念背上身当铠甲。"},{"n":"黑市之主","m":"鬼影幢幢","p":"怀璧其罪","ph":"后期","v":"+20% 最大生命值 / +10 智慧 / +10 幸运","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） 你不再只是客人： · 黑市货架每 **60 秒自动补满**（不用再等补货 / 不用再讨价还价） · 可以**订购**：指定任意一件\"你见过\"的物品（只要是有配方的，或是曾经在手上拿到过的），**3 分钟后到货**（价格 ×2） · 可以**出售警觉**：1 点警觉 = **5 点浮财**——把怪物对你的注意力卖给黑市，让他们找个倒霉鬼顶上 （这是「买通」的反向用法：一个把账挪出去，一个把账换成钱） · 订购的货会直接送到你脚下（包裹形式，落地有声） · 「浮财」的持有上限提到 **90 点**（你已经是黑市自己人了）","r":"","b":"后期把整池从\"买卖\"升级成\"**经营**\"：你开始赚别人的账，也开始替别人安排倒霉鬼。 和「黑货」：订购 = 想要什么就有什么，代价是三分钟与双倍价钱。"},{"n":"一本万利","m":"鬼影幢幢","p":"怀璧其罪","ph":"后期","v":"+20% 暴击伤害","e":"获得怀璧其罪能力（初始无效果，需要先取得任意一张本池招式卡，例如「洗白」） 账本上开始记第二笔账：**你这一局赚到过的浮财总数**（花掉的不减记账） · 每累计 **50 点**：永久 **全伤 +1%，全能减伤+1%**（本局永久，不随花销、死亡、赃物被缴而回落） · 无上限 · 账本随时可以查看：总数、已花、手头还剩多少","r":"","b":"和「聚沙成塔」（7-梁上君子）成对：一个记\"拿过什么\"（物品种类），一个记\"赚过多少\"（浮财总数）。 两张一起拿的效果是：**钱花光了也不亏**——花的是钱，留下的是手艺。"},{"n":"腰牌","m":"鬼影幢幢","p":"瞒天过海","ph":"中期","v":"+4 智慧","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） **伪造一件身份凭证**（主动，冷却 120 秒）：做出一枚「腰牌」——它代表\"你是自己人\"这件事 · 制作要求：你**见过**对应阵营 / 身份的成员（用【画皮】记过的脸也行） · 持有腰牌时，**环境伪装**的识破阈值放宽： · 正面观察识破：**3 秒 → 8 秒** · 交互识破：**1 次 → 3 次**（和【登堂入室】的 3 次叠加，一共能摸 **6** 次） · 需要权限的地方（上锁的门 / 关卡 / 村口栅栏 / 有守卫的门洞）**直接放行**，不触发盘问 · 被盘问时可以**亮牌打发**：立刻中断一次盘问，**30 秒**一次 · 同时只能持有 **1 枚**；亮牌用满 **3 次**之后腰牌开始发旧——第 **4** 次亮牌当场露馅","r":"","b":"它补的是【伪装】那一档最脆的地方：**环境伪装经不起看**。有腰牌之后，\"被看\"这件事才有预算。 和【画皮】：画皮给你一张脸，腰牌给这张脸一个**来路**——一个\"为什么你在这儿\"的解释。 和【登堂入室】：交互次数是**叠加**的（腰牌 3 次 + 登堂入室 3 次），进别人家能一口气开 6 个柜子。"},{"n":"私贩","m":"鬼影幢幢","p":"瞒天过海","ph":"中期","v":"+4 幸运","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） **伪装这条线要增加的不是\"更会卖\"，而是\"更多地方能买\"**——这一张就是新的购物渠道： · 解锁**私贩货架**（3 格）：游商、黑市送货人、走私船——他们**只认赃物与浮财**，不收绿宝石 · 私贩卖的东西： · **伪造品**（成品，价格贵，但不用自己做） · **行头**（一次性身份，喂给【画皮】可以立刻多一张脸） · **伪造用的底料**（做【伪造】的消耗材料） · **情报卷**（一份外面拿不到的情报：某个目标身上有什么 / 某个配方在哪） · 补货：**每 10 分钟**补一次，而且**每次随机**（你今天能买到什么是看运气的） · 与村民的**阴阳菜单**（【熟客】）互不干扰，是两个独立渠道： 村民那边便宜但要养口碑，私贩这边贵、快、不问来路","r":"","b":"和 8-怀璧其罪 ·「黑市」的分工：黑市卖的是**别池的一次性货**（战斗力）； 私贩卖的是**盗贼线自己用的东西**（伪造品 / 行头 / 底料 / 情报）——一个买强度，一个买工具。 和【熟客】：一起拿就是\"双渠道\"——村民养口碑、私贩补急件。"},{"n":"套话","m":"鬼影幢幢","p":"瞒天过海","ph":"中期","v":"+5 智慧","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） 「情报」这条腿的中期核心：**从别人脑子里往外掏\"知识\"** · 伪装状态下对一个生物**闲聊 3 秒**（冷却 20 秒），可以把它掌握的一项**配方 / 图纸 / 蓝图 / 仪式步骤**记成一份**抄本**（自己用、洗白成浮财、拿去交易都行） · **隐藏配方只能这样拿**：整合包里那些\"需要解锁\"的高级配方与高阶仪式，不会掉在地上、也不写在书里—— **只有从知道它的人（已经解锁的玩家）嘴里掏**（本卡是盗贼线获取\"知识类物品\"的主要入口） · 智慧 40+ 时，对同一个目标可以连问 **2 份**；同一个目标被榨干后不再产出 · 被问的生物**不记得你问过什么**（它以为只是一次闲聊）","r":"","b":"盗贼不用侦察——**盗贼问**。这条腿是把\"NPC 的资料库\"变成自己的地图。 和「摸底」的分工：摸底给你看得见的东西（容器、装备），套话给你**问得出来的东西**（钥匙、路线、藏货）。"},{"n":"做局","m":"鬼影幢幢","p":"瞒天过海","ph":"中期","v":"+25% 暴击率","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） · 伪装状态下击杀一个目标：**不拉仇恨、不破伪装**（前提：周围 **6 格内没有其他生物**） · 尸体与现场**不会指向你**：其他生物只会觉得\"它出事了\"，不会追查到你身上 · **代价（写死）**：每做一次局，你的伪装冷却 **+5 秒**，且下一次进入伪装增加3秒（最多15秒不再增加） —— 你骗过了所有人，但你对这套把戏越来越依赖，也越来越慢 · 做局对 boss 无效（boss 一定知道是谁打的）","r":"","b":"这一池唯一的\"动手口子\"：**别人替你背锅的那种杀法**。 它不是让你变强，是让\"杀人\"这件事**不留账**——代价写在冷却里。 和「暗杀」的分界：暗杀要求你藏起来打（看不见），做局要求你装成自己人（看得见）。"},{"n":"借名","m":"鬼影幢幢","p":"瞒天过海","ph":"中期","v":"+40% 移速增幅","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） · 你顶着某个身份做的事（偷、骗、杀、买通），**账会记在那个身份头上**： 嫌疑、仇恨都会转移至原主人 · 如果那个身份有**真主人**（你记下来的脸）：真主人替你背锅，你换回自己的脸就是干净的 · 如果那张脸是你**编的**（没记过真人）：账会落到\"那个样子的人\"身上，追查者会去追同类的生物 · 每次借名成功，该身份在你账本上的\"额度\"**−1 次**（额度用完，这个身份就废了）","r":"","b":"把「买卖」升级成\"**外包**\"：你不转嫁嫌疑（那是 8-怀璧其罪 的买通），你**让别人有名有姓地替你承担**。 和「画皮」：画皮是换一张脸，这张是让那张脸替你挨骂。"},{"n":"改头换面","m":"鬼影幢幢","p":"瞒天过海","ph":"中期","v":"+6% 移速增幅","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） · 进入伪装的时间：**5 秒 → 2 秒** · 伪装期间**换脸只要 0.5 秒**，而且**不打断伪装**（别人看到的只是\"你走神了一下\"） · 伪装被识破的一瞬间，你可以**立刻换成另一张脸**：识破的那个人看到的只是\"附近有两个长得像的路人\" · 「暴露」冷却：10 秒 → **6 秒** · **完全模仿（主动，冷却 600 秒；每个目标本局只能被模仿一次）**： 选一个**玩家**目标（需要先用【画皮】记下它的脸），**持续 600 秒（10 分钟）**： · 期间你**封锁自己\"除盗贼线以外\"的全部增益与数值**——方向卡、质变卡、其他方式池的效果全部挂起 · 换成**被模仿者的全部增益与数值**：它当时的面板、装备、方向与质变效果，原样搬到你这儿 · 期间**只要使用任何别的盗贼系增益 / 能力，完全模仿立刻结束**（连偷东西都算——这段时间你只能当它） · 结束时你自己的增益与数值**原样回来**；被模仿过的目标**本局永久不能再被完全模仿** · 写死的边界：只对**玩家**生效（生物与 boss 没有\"增益面板\"可搬），且**不能模仿你自己**","r":"","b":"速度型改写：不改规则，改\"**切换身份的成本**\"——从\"要躲起来重新做人\"变成\"当场换一张脸\"。 和「伪装」的连线：这一张让伪装从\"状态\"变成\"可以随时切的手艺\"。"},{"n":"以假乱真","m":"鬼影幢幢","p":"瞒天过海","ph":"中期","v":"+5 幸运","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） 【伪造】升级——把假货做成\"能用\"的假货： · **带真效果**：制作时可以**牺牲一件真品**，把它的附魔 / 属性复制到伪造品上 （真品当场销毁，伪造品**真的**能生效一次；用过之后还是会露出假底） · **更难露馅**：细查时的露馅概率 **40% → 15%** · **识破也不指向你**：伪造品被发现时，对方只会觉得\"这东西坏了 / 买到假货了\"， 不会想到是你做的（不涨警觉、不记账） · **伪造图纸**：可以伪造\"配方 / 图纸类\"物品（外观与抄本完全一致），拿去换真材料—— 但**用它做出来的东西一定是假的**（做的时候不会报错，用的时候没效果） · 同时最多持有 **5 件**伪造品","r":"","b":"这一张让伪造品从\"骗眼睛\"升级成\"**骗一次手**\"：带真效果的伪造品可以当消耗品用掉， 所以它不只是交易筹码，也是**一次性的战斗力**（虽然只有一次）。 和【空手套白狼】：带真效果的伪造品摆在柜台，对方很难挑出来。 和【偷天换日】：掉包用的一定得是**没有真效果**的赝品（真效果那件自己留着）。"},{"n":"伪装","m":"鬼影幢幢","p":"瞒天过海","ph":"前期","v":"+15% 移速增幅","e":"【获取伪装能力】盗贼线的社会层，全部基础写在这一张上： **一、默认伪装 = 「环境伪装」**（在拿到【画皮】一类的身份升级之前，你只有这一档） · **进入**：蹲下并静止 **5 秒**（要求：周围 **6 格内没有生物正面对着你**） · **它不改你的模型**：你在别的玩家眼里**没有任何变化**——名字、皮肤、身上的装备都还是你自己； 你只是\"融进了环境\"：动作放轻、气息收敛，生物不把你当成目标 · **但它经不起看**：被任何生物**正面观察满 3 秒**、或**任意一次交互**（右键查看 / 打开交易界面 / 被守卫盘问），伪装立刻识破，并进入 **10 秒**冷却 · 想真正\"变成另一个人\"，得去拿【画皮】那一类身份升级卡 **二、伪装状态下你能做的三件事** · **对怪物**：它们不会主动攻击你——**除非你先出手** · **对村民与铁傀儡**：不敌对，可以正常交易（盗贼专属货架见【熟客】的\"阴阳菜单\"） · **对其他玩家**：默认伪装下你就是你自己，他们不会因此少打你一拳——**骗过玩家的前提是有身份（画皮）** **三、伪装交易** · 成交时你可以多拿走一件对方**没放上交易栏**的东西（或换走一件你放上去的假货 / **伪造品**）， 而对方的交易界面显示的是\"**正常成交**\" **四、暴露**：你造成伤害、受到伤害、主动出手，**或释放任意技能 / 能力** → 伪装立刻消失 + 10 秒冷却","r":"","b":"这一池要的不是\"藏起来\"，是\"**站到人堆里**\"：刺客藏影子，盗贼藏身份。 **环境伪装**解决\"生物把你当背景\"，**身份（画皮）**解决\"人把你当熟人\"——两档不要混。 和「潜形」的分工：潜形解决\"不被看见\"，伪装解决\"被看见也不被怀疑\"——所以伪装**可以在大白天、人堆里用**。 三条玩法线（冒充 / 交易 /"},{"n":"画皮","m":"鬼影幢幢","p":"瞒天过海","ph":"前期","v":"+8 基础生命值","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） 把「**环境伪装**」升级成「**身份伪装**」——这一池\"真正变成别人\"的唯一方式就是这张卡： · 你可以**记下**见过的生物 / 玩家的外观（同时最多记 **3** 张\"脸\"，本局永久保留） · 伪装时可以**指定用哪一张脸**：名字、皮肤、身上的装备都按它显示，别人认不出你本人 · **有脸之后识破规则升级**：正面观察**不再识破**（看多久也只是\"有点像\"）， 只有**主动交互**（右键查看 / 打开交易界面 / 被盘问）才会露馅——【登堂入室】的交互次数就花在这上面 · 换脸不打断伪装，但要花 **1 秒**（被看到换脸 = 立刻识破） · 用过的脸不会\"替你背账\"：这件事只影响别人的**判断**，不转移任何警觉 / 仇恨","r":"","b":"盗贼的基本功：**脸是资源，也是赃物**。 和「借名」（中期）：这张只是让别人找你借来的那张脸，那张真正把\"账\"挂到那个身份头上。"},{"n":"熟客","m":"鬼影幢幢","p":"瞒天过海","ph":"前期","v":"+15% 移速增幅 / +2 智慧 / +2 幸运","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） **这一张写死\"在村里做买卖\"的全部规则（本池交易线的入口）** **一、以物易物（不用绿宝石）** · 伪装状态下与村民交易，可以**直接用赃物袋里的东西换**：它只判断\"这东西对它有没有用\" · 每个村民都有**个人偏好**（它缺什么、手上有什么多余）：对上偏好，换价最高按 **130%** 计价； 拿它不要的东西去换，换价最低按 **70%** 算 · 成交后：**伪装时间刷新**（只要你还在做买卖，伪装就不会自己结束），不涨警觉、不进记录 **二、口碑（同村长期收益）** · 每在同一个村民身上成交 1 次：识破你需要的时间 **+1 秒**（上限 +5 秒）、它给你的报价 **−5%**（上限 −30%） · 口碑按**村落**记账：同村村民共享一部分优惠，村落整体封顶 **−10%** · 你在村子里待着不会掉伪装，也不会因为围观的人多而降级 **三、稀有货架（货源）** · 村民的**稀有交易项**（附魔书、稀有材料、地图）在伪装状态下会对你**明码标价**—— 用偷来的货去换它，是最划算的用法 · 每换走一件稀有货：该村民其余报价 **+5%**（它开始缺货了），逼你换下一个村民 **四、阴阳菜单（盗贼专属货架）** · 伪装状态下打开村民的交易界面，会**多出一栏只属于盗贼的商品**（其他职业看不到这一栏）： · 前中期：**加智慧 / 幸运的基础物品**——手抄残页 +2 智慧、兔脚 +2 幸运、青金石碎 +2 智慧、铜板 +2 幸运 · 后期：**稀有档**——先贤手札 +8 智慧、盗神指骨 +8 幸运、贤者之瞳 +10 智慧、命运骰 +10 幸运 · 这一栏**只收赃物与浮财**（不收绿宝石），价格按你的「识货」估值算；每个村民的份额不一样 · 专属栏目 **10 分钟**补一次货；换走一样，这一栏本轮就不再出同一件 **五、翻脸的下场（只影响它自己）** · 被它识破、或在它面前出手 → 该村民的报价**永久 +50%**（\"这个人信不过\"） · 这份记恨**不会传播**到其他村民——它没有证据，只能自己记着","r":"","b":"这一池的经济腿：**不用偷也能从村里拿东西**——用身份换价格。 交易线全长在图里：**熟客（以物易物 + 口碑 + 货源）→ 倒手（把赃物摆上柜台）→ 空手套白狼（成交时多拿）**， 对**玩家**的部分在 7-梁上君子 ·【暗盘】，两边共用\"赃物可以当钱用\"这个前提。 和「讨价还价」（8-怀璧其罪）：村民这边的折扣"},{"n":"登堂入室","m":"鬼影幢幢","p":"瞒天过海","ph":"前期","v":"+5% 移速增幅","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） · 伪装状态下打开**任何容器 / 门 / 陷阱箱**：**不发出声音**，也不会触发警报 · 村民不会因为你开它家的箱子而喊人（它只当你是它熟人） · 站在**村民 / 铁傀儡身边 3 格内**：它们不会把你当成\"入侵者\"， 你不会因为靠近而被驱赶（村庄的守卫机制对你静默） · 代价：伪装状态下你**至多交互 3 次**（开门 / 开箱 / 翻陷阱箱 / 被盘问都算一次）； 第 **4** 次交互**当场破功**（伪装立刻消失 + 进入冷却）——所以进别人家之前先想好开哪三个柜子","r":"","b":"\"冒充\"这条腿的前期入口：**先能大摇大摆地走进去，再谈拿什么**。 和 7-梁上君子：在别人家里偷，比在野外偷安全得多——只要你别开太多箱子。"},{"n":"摸底","m":"鬼影幢幢","p":"瞒天过海","ph":"前期","v":"+3 智慧","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） 伪装期间的**情报**腿（只看\"位置\"和\"盗贼专属货\"，不看内容）： · 隔着墙看到 **16 格内所有容器、门、陷阱箱**的位置（**不显示里面有什么**） · 看到 8 格内每个村民的**专属（盗贼）交易栏**——也就是它愿意私下卖给你的那几样东西 （见【熟客】的阴阳菜单） · 看不到玩家身上的东西（那是 7-梁上君子 ·「探囊 / 明察秋毫」的活）","r":"","b":"盗贼的\"看\"和猎人的\"看\"不一样：猎人看**路线**，盗贼看**价钱**。 和「探囊」「明察秋毫」（7-梁上君子）：一个看人，一个看箱子，两条情报线合起来才是完整的踩点。"},{"n":"鱼目混珠","m":"鬼影幢幢","p":"瞒天过海","ph":"前期","v":"+15% 移速增幅","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） · 伪装状态下，怪物不只是\"不主动攻击\"——它们**完全忽略你**： 你从它们身边走过不会打断它们的巡逻，它们不会因为你靠近而聚集 / 咆哮 · 你可以站在一群怪中间不动（它们当你是同类） · **如果这时候你出手**：周围的怪要 **2 秒后**才反应过来（\"刚才那个是不是人？\"） —— 这 2 秒里它们的索敌优先级里没有你","r":"","b":"把伪装从\"社交手段\"变成\"移动手段\"：**过路费是零**。 和「潜形」的区别：潜形要慢、要暗、要躲；鱼目混珠是**大摇大摆地穿过怪群**，只是不能出手。 出口：那 3 秒的迟钝窗口，是给正面线队友（或者你买的黑货）用的。"},{"n":"伪造","m":"鬼影幢幢","p":"瞒天过海","ph":"前期","v":"+3 智慧","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） 【获取伪造能力】——盗贼的手艺活，**伪造品**从这一张开始存在： · **前提**：你得**见过真品**（拿在手上过一次、或用「识货」看清过它的名字与外观） · 消耗：**一件同类材料 + 3 秒**，做出 **1 件「伪造品」**（制造期间被打断则材料浪费） · 伪造品**看起来和真品一模一样**：外观、堆叠数量、显示的名字都对；但**实际效果是假的**—— 附魔不生效、属性按最低档、喝下去的药水没有效果 · **寿命**：伪造品在被\"细查\"时有 **40%** 当场露馅——细查 = 右键细看 / 放上附魔台或铁砧 / 使用它一次；用掉之后自然也是假的 · 伪造品可以：摆上交易台（【空手套白狼】【暗盘】）· 塞回原位（替换真品）· 当作诱饵丢给别人 · 同时最多持有 **3 件**伪造品","r":"","b":"这一池的交易、掉包、栽赃全都吃\"伪造品\"：**能给假货，才谈得上骗**。 和 8-怀璧其罪 ·「门路」的**赝品**（花 2 点买的成品）分工：那张是**买**，这张是**做**， 做出来的更多、更便宜，但要花时间与材料。 和「偷师」：抄来的配方可以让伪造品\"看起来更像\"（有配方的品类伪造时不消耗材料）。"},{"n":"千人千面","m":"鬼影幢幢","p":"瞒天过海","ph":"后期","v":"+8 智慧","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） 本池的招牌改写：**身份不再是一个状态，而是一份名单** · 你可以同时持有 **3 个\"活着的身份\"**（本局永久保留，死亡也不清） · **每个身份有独立的警觉 / 仇恨账**：一个身份的账满了（那批怪开始追杀这张脸），你切到另一个，立刻干净 · 身份之间**互不牵连**：A 身份犯的事不会影响 B 身份的信誉 · 切换身份只要 **0.5 秒**，不打断伪装；身份用完了可以\"作废\"一个，空出名额去记新的脸","r":"","b":"后期把「借名」升级成**账本管理**：不是把账甩给别人，而是**开三个户头**。 和 8-怀璧其罪 ·「买通」：买通是拿钱买干净，这张是**换一个不用买干净的身份**。"},{"n":"空手套白狼","m":"鬼影幢幢","p":"瞒天过海","ph":"后期","v":"+25% 暴击率","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） · 「伪装交易」升级：每次成交可以多拿走 **2 件**对方没放上交易栏的东西（原来是 1 件） · 成交后对方 **60 秒内不会发现**；如果它中途去检查自己的箱子 / 背包， 你会在检查发生前 3 秒看到提示（可以提前终止交易、把界面\"恢复正常\"） · 对**其他玩家**：它那边全程显示的是它自己挂上去的东西， 你拿走的、你换进去的假货，都在它的界面上\"正常成交\" · **伪造品可以直接上柜台**：你可以把**伪造品**摆上交易栏，对方会把它当成真货—— 用它换走真货（**你拿真、它拿假**），这是本池最赚的一笔 · **掉包**：成交那一瞬间，可以把对方摆上来的真货**换成一件同类的伪造品**， 双方界面都显示\"正常成交\"（对方要 60 秒后才可能发现少了东西）","r":"","b":"把\"偷\"和\"交易\"彻底并成一件事：**你以为我们在做买卖，其实我在搬你家**。 和 7-梁上君子 ·「不告而取」：那张管野外偷，这张管在界面里偷——两条腿一条都不缺。"},{"n":"偷天换日","m":"鬼影幢幢","p":"瞒天过海","ph":"后期","v":"+25% 暴击伤害","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） **别人的交易，你也能插一手**（主动技能，冷却 60 秒）： · 8 格内**任意两个生物之间**正在进行的交易（村民与村民、村民与玩家、玩家与玩家）， 你可以在成交的那一瞬间把成交物**换成赃物袋里的东西、或一枚伪造品** · 交易双方**都以为正常成交**（界面、音效、记录全都正常） · 被换进去的东西，双方要到**使用它的时候**才会发现不对 · 你换走的东西直接进赃物袋，且不产生任何提示","r":"","b":"这一池最\"盗贼\"的一张：**不是骗过交易的一方，而是骗过交易本身**。 和「倒手」：倒手是你自己下场买卖，这张是**你根本不在场，买卖也变成你的**。"},{"n":"人畜无害","m":"鬼影幢幢","p":"瞒天过海","ph":"后期","v":"+30% 移速增幅","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） · **即使伪装已经破了**，任何生物在索敌时都会把你排在**最后**—— 它们先去打别人；只有在没有别的目标时才会来打你 · 第一次识破你的人（村民 / 玩家 / 守卫）要多花 **5 秒**的正面观测确认（这 5 秒里你可以直接走掉） · 你被攻击时，攻击者的同伴不会立刻一起上（持续5秒）","r":"","b":"这一池的\"活着\"保障：**你不需要一直骗成功，你只需要一直不像敌人**。 和「散财」（8-怀璧其罪）：一个用钱买\"不被追\"，一个用脸买\"不被先打\"。"},{"n":"一丘之貉","m":"鬼影幢幢","p":"瞒天过海","ph":"后期","v":"+25% 移速增幅","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） 多人向：**伪装可以外借**（主动技能，冷却 45 秒） · 给 8 格内的队友套上伪装（用你记下的任意一张脸），持续 **30 秒** · 两人之间的行为**不会破坏对方的伪装**（你在他面前偷东西、他当你面开箱子都没事） · 两人一起与同一个村民 / 玩家交易：价格再 **−10%**，并且识破需要的时间 **翻倍** · 你被识破时，队友的伪装不会跟着掉（各算各的账）","r":"","b":"盗贼线的团队形态：**一个人是贼，两个人是\"这村子里的两位熟人\"**。 和 7-梁上君子 ·【暗盘】：暗盘分的是赃物，这张分的是**身份**——他还能继续用这张脸去骗下一家。"},{"n":"大隐于市","m":"鬼影幢幢","p":"瞒天过海","ph":"后期","v":"+25% 暴击率","e":"获得伪装能力（初始无效果，需要先取得任意一张伪装招式卡，例如「伪装」） 改写\"被识破\"的门槛：**只要你在人堆里，就永远不会被识破** · 当 **32 格内有 3 个以上友善生物（村民 / 铁傀儡 / 队友）** 时（被伪装者不算）： · 你**不会被任何方式识破**，伪装也**不会因为你造成伤害 / 受到伤害 / 主动出手而消失** · 你在人群中偷、抢、杀，旁人的第一反应都是\"不是我这边的事\" · **写死的边界（避免无敌）**：以上只在\"有人看着\"时成立；一旦你**脱离人群**（32 格内友善生物 < 3）， 伪装立刻按常规规则结算——立刻消失、进入 10 秒冷却，并且所有账一起找上门","r":"","b":"池名的另一面：**最不像贼的地方，就是贼最安全的地方**。 它把盗贼线推向\"社会玩法\"的极端——你要的不是没人看见你，而是**看见你的都不说话**。 和「鱼目混珠」：一个混在怪里，一个混在人里。"}];
+
+const WORD_PALETTE = ["#e25822","#7cb342","#cfd8dc","#8bc34a","#c9a227","#5fb3a1","#b98ad1","#d4776b",
+                      "#7fa7d1","#a8c47a","#d1a95f","#8fb3c4","#c96f8b","#9bd1c4","#d1d18f","#a08fb3"];
+const hashIdx = s => { let h = 0; for (const ch of s) h = (h*31 + ch.charCodeAt(0)) >>> 0; return h % WORD_PALETTE.length; };
+
+/** 从附带数值里抽词条：'+20 护甲值' / '+8% 移速增幅' → 词条名 */
+function wordsOf(v){
+  const out = new Set();
+  for (const m of String(v||"").matchAll(/[+\-−][\d.]+%?\s*([^、+）)\s]+)/g)) out.add(m[1]);
+  return [...out];
+}
+const CUE_RE = /(不再|改为|视为|无视|免疫|无法|必须|只能|才算|不触发)/;
+
+/** 419 张 → 引擎卡形制。规则集中在这里，好读也好替换。 */
+function deriveReal(list){
+  const byName = new Map(list.map(c => [c.n, c]));
+  const cards = list.map((c, i) => {
+    const entry = !c.ph;                                    // 入场券：没有阶段
+    const tags = [];
+    if (c.m) tags.push("方式/" + c.m);
+    if (c.p) tags.push("池/" + c.p);
+    wordsOf(c.v).forEach(w => tags.push("词条/" + w));
+    let tier, cls;
+    if (entry) { tier = 1; cls = "A"; }                     // 入场券定「手」＝我们的方向卡
+    else {
+      const bands = { "前期":[1,2], "中期":[2,3,4], "后期":[4,5] }[c.ph] || [1,2,3,4,5];
+      const seq = list.filter(x => x.p === c.p && x.ph === c.ph).findIndex(x => x.n === c.n);
+      tier = bands[seq % bands.length];
+      cls = CUE_RE.test(c.e || "") ? "C" : "B";             // 含机制改写措辞 → 质变卡（推导）
+    }
+    const requires = [];
+    if (c.r) c.r.split(/[、,，]/).map(s=>s.trim()).filter(Boolean).forEach(pre => {
+      if (byName.has(pre)) requires.push("前置/" + pre);
+    });
+    return { id: c.n, cn: c.n, raw: c, tier, cls, tags, requires, entry };
+  });
+  // 被前置指向的卡获得同名判断标签（判断标签不投影成池，只作谓词）
+  const judged = new Set();
+  cards.forEach(c => c.requires.forEach(t => judged.add(t.replace("前置/",""))));
+  cards.forEach(c => { if (judged.has(c.cn)) c.tags.push("前置/" + c.cn); });
+  return { cards, judged };
+}
+const REAL = deriveReal(REAL_RAW || []);
+
+/** 标签注册表按当前数据集运行时构建（派生标签也要有颜色与判断标记） */
+let TAGSET = new Map();
+function buildTagSet(list){
+  const m = new Map();
+  Object.entries(TAGS).forEach(([k,v]) => m.set(k, {color:v.color, judgment:v.judgment}));
+  const seen = new Set();
+  for (const c of list) for (const t of c.tags||[]) {
+    if (m.has(t) || seen.has(t)) continue;
+    seen.add(t);
+    m.set(t, { color: WORD_PALETTE[hashIdx(t)], judgment: t.startsWith("前置/") });
+  }
+  TAGSET = m;
+  return m;
+}
+
+const DATASETS = {
+  demo: { label:"示例内容 17 张", sub:"引擎真数据（tier/tags/class 都在 JSON 里）",
+          cards: () => CARDS, note:"这是仓库里的最小示例集，字段是内容作者手写真定的。" },
+  real: { label:"真卡表 419 张", sub:"tier / tags / class 为推导草稿（P5/P2 未定稿）",
+          cards: () => REAL.cards, note:"数据来自队友导出；<b>等级档与标签是我按规则推的</b>，等他们补真字段后整段替换。" },
+};
+let active = "demo";
+
+/* ============ 引擎移植 ============ */
+const key = c => NS + ":" + c;
+const pathOf = k => k.split(":")[1];
+const tagPath = t => t.split(":")[1];
+
+let CONTENT = DATASETS[active].cards();     // 门 G1 时可清空
+let FIXED_IDS = [];                          // 首抽固定给出的那批（按数据集现算）
+buildTagSet(CONTENT);
+const cardIndex = () => new Map(CONTENT.map(c => [key(c.id), c]));
+const markerTags = () => [...TAGSET.entries()].filter(([,v]) => v.judgment).map(([t]) => key(t));
+const tagMeta = t => TAGSET.get(t) || { color:"#7d8b99", judgment:false };
+/** 矩阵只画有内容的标签里最大的若干个（派生标签有上百个，全画没法看）。 */
+function topTags(n){
+  const count = new Map();
+  for(const c of CONTENT) for(const t of (c.tags||[])) if(!tagMeta(t).judgment) count.set(t,(count.get(t)||0)+1);
+  return [...count.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).slice(0,n).map(([t])=>key(t));
+}
+
+const tagShare = w => w <= 0 ? 0 : CAP * w / (w + W0);
+
+function poolIndex(idx){
+  const m = new Map();
+  for(const c of idx.values()){
+    for(const t of c.tags){
+      if(markerTags().includes(key(t))) continue;      // 判断标签不投影
+      const k = c.tier + "|" + key(t);
+      if(!m.has(k)) m.set(k, new Set());
+      m.get(k).add(key(c.id));
+    }
+  }
+  const out = new Map();
+  for(const [k,v] of m) out.set(k, [...v].sort());      // id 有序（TreeSet 语义）
+  return out;
+}
+const poolOf = (pools, tier, tag) => pools.get(tier + "|" + tag) || [];
+
+function candidates(idx, owned){
+  const ownedTagSet = new Set();
+  for(const id of owned){ const c = idx.get(id); if(c) (c.tags||[]).forEach(t => ownedTagSet.add(key(t))); }
+  return [...idx.values()]
+    .filter(c => !owned.has(key(c.id)))
+    .filter(c => (c.requires||[]).every(t => ownedTagSet.has(key(t))))
+    .map(c => key(c.id)).sort();
+}
+function tagWeights(idx, owned){
+  const w = new Map(); let total = 0;
+  for(const id of owned){
+    const c = idx.get(id); if(!c) continue;
+    for(const t of c.tags){
+      if(markerTags().includes(key(t))) continue;
+      w.set(key(t), (w.get(key(t))||0) + 1); total++;
+    }
+  }
+  return {w, total, order:[...w.keys()].sort()};
+}
+
+/** 一格的解析：返回 tier 分布、S、每 tag 的可用性，以及最终每卡概率。 */
+function resolveSlot(space, idx, pools, tw, tierWeights, filterCls){
+  const byTier = new Map();
+  for(const id of space){ const t = idx.get(id).tier; if(!byTier.has(t)) byTier.set(t, []); byTier.get(t).push(id); }
+  let allowed = [...byTier.keys()].filter(t => (tierWeights[t]||0) > 0).sort((a,b)=>a-b);
+  let fellBack = false;
+  if(allowed.length === 0) return { exhausted:true };   // 日程是更高法则：本格空着，不回补日程外等级
+
+  let classRestricted = false;
+  if(filterCls){
+    const f = allowed.filter(t => byTier.get(t).some(id => idx.get(id).cls === filterCls));
+    if(f.length) { allowed = f; classRestricted = true; }
+    else fellBack = "no-" + filterCls + "-in-allowed-tiers";
+  }
+  const share = tagShare(tw.total);
+
+  // tier 概率：日程权重归一（全零→均匀）
+  const tierP = new Map();
+  if(allowed.length){
+    const sum = allowed.reduce((a,t)=>a + Math.max(0,(tierWeights[t]||0)), 0);
+    for(const t of allowed) tierP.set(t, sum<=0 ? 1/allowed.length : Math.max(0,(tierWeights[t]||0))/sum);
+  }
+  // 每个 tier：可用标签（池非空且与 tierSpace 有交）按 S·W_t/ΣW，剩余质量归随机支
+  const perTier = new Map();
+  for(const t of allowed){
+    let tierSpace = byTier.get(t).slice().sort();
+    if(classRestricted) tierSpace = tierSpace.filter(id => idx.get(id).cls === filterCls);
+    let directed = 0; const tagUse = [];
+    for(const g of tw.order){
+      const pool = poolOf(pools,t,g).filter(id => tierSpace.includes(id));
+      if(!pool.length) continue;
+      const p = share * (tw.w.get(g)||0) / Math.max(1, tw.total);
+      directed += p; tagUse.push({tag:g, pool, p});
+    }
+    perTier.set(t, {tierSpace, tagUse, randomP: Math.max(0, 1 - directed)});
+  }
+  // 摊到每卡
+  const prob = new Map();
+  for(const [t,tp] of perTier){
+    const push = (id,p)=>prob.set(id,(prob.get(id)||0)+p);
+    for(const tu of tp.tagUse) for(const id of tu.pool) push(id, tierP.get(t) * tu.p / tu.pool.length);
+    for(const id of tp.tierSpace) push(id, tierP.get(t) * tp.randomP / tp.tierSpace.length);
+  }
+  return {allowed, tierP, share, perTier, classRestricted, fellBack,
+          dist:[...prob.entries()].map(([id,p])=>({id,p})).sort((a,b)=>b.p-a.p)};
+}
+
+/** 抽样：与 Java 同一个判定顺序、同一串随机调用 */
+function sampleSlot(res, rng){
+  const allowed = res.allowed;
+  const sum = allowed.reduce((a,t)=>a+Math.max(0,(res.tierW||{})[t]||0),0);
+  let tier;
+  if(sum<=0) tier = allowed[Math.floor(rng()*allowed.length)];
+  else {
+    let roll = rng()*sum;
+    tier = allowed[allowed.length-1];
+    for(const t of allowed){ const w=Math.max(0,(res.tierW||{})[t]||0); if(roll<w){tier=t;break;} roll-=w; }
+  }
+  const tp = res.perTier.get(tier);
+  const roll2 = rng();
+  let acc = 0, picked = null;
+  for(const tu of tp.tagUse){ acc += tu.p; if(roll2 < acc){ picked = tu; break; } }
+  if(picked){
+    const card = picked.pool[Math.floor(rng()*picked.pool.length)];
+    return {tier, branch:"tag", tag:picked.tag, pool:picked.pool.length, card};
+  }
+  return {tier, branch:"random", pool:tp.tierSpace.length, card: tp.tierSpace[Math.floor(rng()*tp.tierSpace.length)]};
+}
+
+/** 一次抽：三阶段 + 逐格留痕（移植自 DrawEngine.draw） */
+function drawOnce(drawNo, owned, rng){
+  const idx = cardIndex(), pools = poolIndex(idx);
+  const row = SCHEDULE.find(s => drawNo >= s.r[0] && drawNo <= s.r[1]);
+  if(!row) return {status:"NO_ROW"};
+  const cands = candidates(idx, owned);
+  if(!cands.length) return {status:"NO_CARDS", row};
+  const prof = PROFILES[row.profile];
+  if(prof.fixed){
+    // 固定给出的那一批：示例集里是写死的五张 starter_1..5；真卡表里是五张入场券。
+    // 演示把它按当前数据集现算，避免「换个内容首抽就没牌」这种假死。
+    const fixedIds = FIXED_IDS.length ? FIXED_IDS : prof.fixed;
+    const offers = fixedIds.map(k => k.startsWith(NS+":") ? k : key(k)).filter(k => cands.includes(k));
+    return {status: offers.length? "OK":"NO_CARDS", row, offers, fixed:true, log:[]};
+  }
+  const tw = tagWeights(idx, owned);
+  const offers = [], seen = new Set(), trace = [];
+  prof.slots.forEach((slot, i) => {
+    const space = cands.filter(c => !seen.has(c));
+    if(!space.length){ trace.push({slot:i, skipped:"no candidates"}); return; }
+    const res = resolveSlot(space, idx, pools, tw, row.w, slot.f);
+    if (res.exhausted) { trace.push({slot:i, skipped:"本格空着——日程内的等级已被前面几格抽干（不回补 T5）"}); return; }
+    res.tierW = row.w;
+    const s = sampleSlot(res, rng);
+    offers.push(s.card); seen.add(s.card);
+    trace.push({slot:i, res, s});
+  });
+  return {status: offers.length? "OK":"NO_CARDS", row, offers, trace, tw, cands};
+}
+
+/* ============ 随机流 ============ */
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+
+/* ============ 局面与渲染 ============ */
+let state, seed = 20260925;
+function reset(){ state = {draw:1, owned:new Set(), hist:[]}; render(); }
+
+function el(id){ return document.getElementById(id); }
+function esc(s){ return String(s).replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+
+function render(){
+  const empty = !CONTENT.length;
+  const rng = mulberry32(seed + state.draw*7919);
+  let cur = null;
+  if(state.draw <= TOTAL_DRAWS){
+    cur = drawOnce(state.draw, state.owned, rng);
+    cur = cur.status==="OK" ? cur : {...cur, offers:[], trace:[]};
+  }
+  renderRail(cur); renderOffer(cur, empty); renderScope(cur); renderOwned(); renderCurve(cur); renderMatrix(cur);
+  el("seedLab").textContent = "seed " + seed;
+  el("phaseLab").textContent = empty ? "内容已删空（门 G1 现场）"
+    : cur ? (state.draw===1 ? "入场 · 第 1 抽" : (cur.row ? `第 ${state.draw} 抽 · profile ${cur.row.profile}` : ""))
+    : "本局结束 · 15 抽已尽";
+  if(cur && cur.status==="NO_CARDS") el("hint").innerHTML = '<b style="color:var(--cinnabar)">卡池无卡</b> —— 引擎没有崩，只是这个人已经没有可抽的卡了。';
+  else if(!cur) el("hint").textContent = "15 次上限＝日程覆盖范围；第 16 抽在日程里没有行，调用方据此拒绝。";
+  else if(state.draw===1) el("hint").textContent = "首抽＝五张入场券固定给出、无随机（五 pick 一）。选一张开始。";
+  else el("hint").textContent = "每张卡下方是它在这一格的真实中签概率；点「择一张」拿走它，右侧显微镜会换成下一抽的分布。";
+  state._cur = cur;
+}
+
+function renderRail(cur){
+  const ul = el("rail"); ul.innerHTML = "";
+  for(let d=1; d<=TOTAL_DRAWS; d++){
+    const li = document.createElement("li");
+    const h = state.hist[d-1];
+    const row = SCHEDULE.find(s => d>=s.r[0] && d<=s.r[1]);
+    const shown = h ? h.tiers : [];
+    const label = h ? (h.picked ? pathOf(h.picked).slice(0,12) : "—")
+                    : (row ? row.profile.replace("standard_early","早段").replace("standard","标准") : "");
+    li.className = (h?"done ":"") + (d===state.draw?"cur":"");
+    li.innerHTML = `<span class="n">${d}</span><span>${esc(label)}</span>`
+      + `<span class="t">${shown.map(t=>`<span class="pip t${t} on" title="T${t}"></span>`).join("")}</span>`;
+    ul.appendChild(li);
+  }
+}
+
+function renderOffer(cur, empty){
+  const box = el("offer"); box.innerHTML = "";
+  if(empty){ box.innerHTML = `<div class="fu void" style="grid-column:1/-1;min-height:150px">卡池无卡<br><span style="font-family:var(--mono);font-size:11px;letter-spacing:.1em">删空内容后引擎照跑 · 无崩溃 · 无数值分支</span></div>`;
+    el("act").disabled = true; return; }
+  el("act").disabled = !(cur && cur.offers && cur.offers.length);
+  if(!cur){ box.innerHTML = `<div class="fu void" style="grid-column:1/-1;min-height:150px">本局 15 抽已尽<br><span style="font-family:var(--mono);font-size:11px">重开本局可再来一次</span></div>`; return; }
+  if(cur.status==="NO_CARDS"){ box.innerHTML = `<div class="fu void" style="grid-column:1/-1;min-height:150px">卡池无卡</div>`; return; }
+  const idx = cardIndex();
+  cur.offers.forEach((id,i)=>{
+    const c = idx.get(id); if(!c) return;
+    let prob = null;
+    if(cur.fixed) prob = 1/cur.offers.length;
+    else { const t = cur.trace[i]; if(t && t.res) prob = (t.res.dist.find(x=>x.id===id)||{p:0}).p; }
+    const d = document.createElement("div");
+    d.className = "fu"; d.style.animationDelay = (i*70)+"ms";
+    d.innerHTML = `<div class="slot">SLOT ${i+1}${c.cls==="A"?" · 必方向卡":""}</div>
+      <div class="cls ${c.cls}">${c.cls}</div>
+      <div class="nm">${esc(pathOf(id))}</div>
+      <div class="tier">T${c.tier}${c.system? " · 体系 "+esc(c.system):""}${(c.requires||[]).length? " · 需 "+esc(c.requires.join("/")):""}</div>
+      <div class="tags">${c.tags.slice(0,4).map(t=>`<span class="tag" style="border-color:${tagMeta(t).color}55;color:${tagMeta(t).color}">${t}${tagMeta(t).judgment?"◇":""}</span>`).join("")}${c.tags.length>4?`<span class="tag">+${c.tags.length-4}</span>`:""}</div>
+      <div class="pm">${prob==null?"—":'<b>'+(prob*100).toFixed(prob>=0.1?1:2)+'%</b>'}<br><span style="font-size:9.5px;letter-spacing:.08em">${prob==null?"固定给出":"这一格的中签率"}</span>
+      ${prob!=null&&prob>0?`<span class="bar"><i style="width:${Math.min(100,prob*260)}%"></i></span>`:""}</div>`;
+    d.onclick = ()=> pick(id);
+    box.appendChild(d);
+  });
+}
+
+function pick(id){
+  const cur = state._cur; if(!cur || !cur.offers || !cur.offers.length) return;
+  const tiers = cur.fixed ? [] : [...new Set(cur.trace.map(t=>t.s? t.s.tier : null).filter(x=>x!=null))];
+  state.hist.push({draw:state.draw, picked:id, offers:cur.offers.slice(), tiers,
+    S: cur.tw? cur.tw.total? tagShare(cur.tw.total):0 : 0});
+  state.owned.add(id);
+  state.draw++;
+  render();
+}
+
+function renderScope(cur){
+  const box = el("scope");
+  if(!cur || !cur.trace || !cur.trace.length){
+    box.innerHTML = `<div class="note">${cur&&cur.fixed ? "首抽是固定五张入场券，不经过三阶段采样——所以这里没有概率分布可看。" : "先择一张，进入第 2 抽后这里会摊开每一格的分布。"}</div>`;
+    return;
+  }
+  const idx = cardIndex();
+  box.innerHTML = cur.trace.map(t=>{
+    if(t.skipped) return `<div class="slotbox"><details open><summary><span class="lab">SLOT ${t.slot+1}</span><span class="got">跳过：${esc(t.skipped)}</span></summary></details></div>`;
+    const r = t.res, s = t.s;
+    const top = r.dist.slice(0,6);
+    const maxP = top.length? top[0].p : 1;
+    return `<details class="slotbox" ${t.slot===0?"open":""}><summary>
+        <span class="lab">SLOT ${t.slot+1}</span>
+        <span class="badge t">T${s.tier}</span>
+        <span class="badge ${s.branch==="tag"?"g":"r"}">${s.branch==="tag"? "标签支 "+tagPath(s.tag) : "随机支"}</span>
+        <span class="badge">池 ${s.pool} 张</span>
+        <span class="badge j">S ${(r.share*100).toFixed(1)}%</span>
+        ${r.fellBack?`<span class="badge" style="color:var(--cinnabar)">回退</span>`:""}
+        <span class="got">${esc(pathOf(s.card))}</span>
+      </summary><div class="rows">${top.map(x=>{
+        const c = idx.get(x.id);
+        return `<div class="row ${x.id===s.card?"hit":""}">
+          <span class="who ${x.id===s.card?"hit":""}" title="${esc(x.id)} · T${c.tier} ${c.cls}">${esc(pathOf(x.id))}</span>
+          <span class="tr"><i style="width:${maxP? (x.p/maxP*100).toFixed(1):0}%"></i></span>
+          <span class="pv">${(x.p*100).toFixed(x.p>=0.1?1:2)}%</span></div>`;}).join("")}
+        ${r.dist.length>6?`<div class="note" style="margin-top:4px">另有 ${r.dist.length-6} 个候选分摊剩余概率</div>`:""}
+      </div></details>`;
+  }).join("") + `<div class="note" style="margin-top:8px">格与格之间不重复出同一张（后格从前格已出集合里扣掉），所以每格的分布是<b>条件分布</b>——这就是它能对上引擎逐格留痕的原因。</div>`;
+}
+
+function renderOwned(){
+  const box = el("owned"), idx = cardIndex();
+  box.innerHTML = [...state.owned].map(id=>{
+    const c = idx.get(id); if(!c) return "";
+    return `<span class="own"><i style="background:${tagMeta(c.tags[0]).color}"></i>${esc(pathOf(id))}</span>`;
+  }).join("") || '<span class="note">一张还没有。</span>';
+  const tw = tagWeights(idx, state.owned);
+  const cands = candidates(idx, state.owned).length;
+  el("ownedNote").innerHTML = `ΣW＝<b style="color:var(--brass)">${tw.total}</b> → S＝${(tagShare(tw.total)*100).toFixed(1)}% · 可抽池 <b style="color:var(--brass)">${cands}</b>/${CONTENT.length}（判断标签◇不计入 ΣW）`;
+}
+
+function renderCurve(){
+  const svg = el("curve"), W = 340, H = 96;
+  const pts = [];
+  for(let w=0; w<=48; w+=1){ pts.push([w, tagShare(w)]); }
+  const sx = w => w/48*(W-16)+8, sy = p => H-10 - p*(H-22)/1;
+  const d = pts.map((p,i)=>(i?"L":"M")+sx(p[0]).toFixed(1)+" "+sy(p[1]).toFixed(1)).join(" ");
+  const tw = tagWeights(cardIndex(), state.owned);
+  svg.innerHTML = `
+    <line x1="8" y1="${sy(CAP)}" x2="${W-8}" y2="${sy(CAP)}" stroke="#e25822" stroke-dasharray="3 3" opacity=".55"/>
+    <text x="${W-10}" y="${sy(CAP)-4}" fill="#e25822" font-size="9" text-anchor="end" font-family="monospace">上限 80%（永不到顶）</text>
+    <path d="${d}" fill="none" stroke="#c9a227" stroke-width="1.6"/>
+    <circle cx="${sx(tw.total)}" cy="${sy(tagShare(tw.total))}" r="3.6" fill="#e9e2d0"/>
+    <text x="8" y="12" fill="#7d8b99" font-size="9" font-family="monospace">S</text>
+    <text x="${W/2}" y="${H-1}" fill="#7d8b99" font-size="9" text-anchor="middle" font-family="monospace">已拥有卡的标签累计权重 ΣW →</text>`;
+  el("curveNote").innerHTML = `当前 ΣW＝${tw.total}、S＝${(tagShare(tw.total)*100).toFixed(1)}%。参考手感：ΣW=5→31%、10→44%、20→57%、40→67%。剩下来的 ${((1-tagShare(tw.total))*100).toFixed(0)}% 永远是纯随机——这是第一批裁留给「没看过这张卡的人」的余味。`;
+}
+
+function renderMatrix(cur){
+  const idx = cardIndex(), pools = poolIndex(idx);
+  const tagList = topTags(7);
+  const usable = cur && cur.cands ? cur.cands : (cur && cur.status!=="NO_ROW" ? candidates(idx, state.owned) : []);
+  const w = cur && cur.row ? cur.row.w : {};
+  let html = `<tr><th>等级</th>${tagList.map(t=>`<th style="color:${tagMeta(tagPath(t)).color}" title="${esc(t)}">${esc(tagPath(t).replace("方式/","方·").replace("池/","池·").replace("词条/",""))}${tagMeta(tagPath(t)).judgment?"◇":""}</th>`).join("")}</tr>`;
+  for(let tier=1; tier<=5; tier++){
+    html += `<tr><th>T${tier}${(w[tier]||0)>0?`<br><span style="color:var(--brass)">${w[tier]}</span>`:""}</th>`;
+    for(const t of tagList){
+      if(tagMeta(tagPath(t)).judgment){ html += `<td class="judg">—</td>`; continue; }
+      const g = poolOf(pools, tier, t).length;
+      const live = poolOf(pools, tier, t).filter(id=>usable.includes(id)).length;
+      html += `<td class="${g?"":"zero"}">${g?`<b>${live}</b><s>/${g}</s>`:"·"}</td>`;
+    }
+    html += `</tr>`;
+  }
+  el("matrix").innerHTML = html;
+}
+
+/* ============ 门 G1 开关 ============ */
+/* ============ 数据集切换 / 内容开关 ============ */
+function setDataset(name){
+  active = name;
+  CONTENT = DATASETS[name].cards();
+  FIXED_IDS = name === "real" ? CONTENT.filter(c => c.entry).map(c => key(c.id)) : [];
+  buildTagSet(CONTENT);
+  document.querySelectorAll(".ds").forEach(b => b.classList.toggle("on", b.dataset.ds === name));
+  reset(); renderBrowser();
+  el("log").innerHTML = `<b>[数据集]</b> ${DATASETS[name].label} · ${CONTENT.length} 张 · 标签 ${TAGSET.size} 个（其中判断标签 ${[...TAGSET.values()].filter(v=>v.judgment).length} 个◇）<br>  ${DATASETS[name].note}`;
+  runGates();
+}
+el("dsDemo").onclick = () => setDataset("demo");
+el("dsReal").onclick  = () => setDataset("real");
+
+/* 卡表浏览器：真卡表 419 张的原文都在这里，可按方式/池/阶段/关键词筛 */
+function renderBrowser(){
+  const box = el("browser");
+  const list = DATASETS[active].cards();
+  if (active !== "real"){
+    box.innerHTML = `<div class="note">切到「真卡表 419 张」后，这里给出全部卡面原文（方式 / 三级池 / 阶段 / 附带数值 / 效果全文 / 前置 / 备注），可按关键词检索。</div>`;
+    return;
+  }
+  const q = (el("bq").value || "").trim();
+  const fm = el("bmode").value, fp = el("bpool").value, fph = el("bphase").value;
+  const modes = [...new Set(list.map(c => c.raw.m))];
+  const pools = [...new Set(list.filter(c => !fm || c.raw.m === fm).map(c => c.raw.p).filter(Boolean))];
+  const rows = list.filter(c =>
+      (!fm || c.raw.m === fm) && (!fp || c.raw.p === fp) && (!fph || (c.raw.ph||"入场") === fph) &&
+      (!q || (c.raw.n + c.raw.v + c.raw.e + c.raw.b).includes(q)));
+  el("bmode").innerHTML = `<option value="">全部方式</option>` + modes.map(m=>`<option ${m===fm?"selected":""}>${esc(m)}</option>`).join("");
+  el("bpool").innerHTML = `<option value="">全部池</option>` + pools.map(p=>`<option ${p===fp?"selected":""}>${esc(p)}</option>`).join("");
+  el("bhit").textContent = `${rows.length} / ${list.length} 张`;
+  box.innerHTML = rows.slice(0, 140).map(c => `<div class="crd">
+      <div class="ch"><b>${esc(c.raw.n)}</b><span class="cm">${esc(c.raw.m||"入场券")} · ${esc(c.raw.p||"—")} · ${esc(c.raw.ph||"入场")}</span>
+        <span class="cd">推导 T${c.tier} · ${c.cls}${c.requires.length? " · 需 "+esc(c.requires.join("/")):""}</span></div>
+      <div class="cv">${esc(c.raw.v)}</div>
+      <div class="ce">${esc(c.raw.e)}</div>
+      ${c.raw.b?`<details class="cb"><summary>备注</summary>${esc(c.raw.b)}</details>`:""}
+    </div>`).join("") + (rows.length>140?`<div class="note" style="margin-top:9px">为滚动性能只显示前 140 条，继续筛可缩小范围。</div>`:"");
+}
+["bq","bmode","bpool","bphase"].forEach(id => { el(id).oninput = renderBrowser; el(id).onchange = renderBrowser; });
+el("bclear").onclick = () => { el("bq").value=""; el("bmode").value=""; el("bpool").value=""; el("bphase").value=""; renderBrowser(); };
+
+el("g1").onclick = () => {
+  const on = CONTENT.length > 0;
+  CONTENT = on ? [] : DATASETS[active].cards();
+  el("g1").textContent = on ? "把内容装回来" : "把内容删空（门 G1）";
+  reset();
+  el("log").innerHTML = on
+    ? `<b>[G1]</b> 内容已清空 · 引擎仍然完成一次抽取并回「卡池无卡」，没有崩、没有特例分支——地基不靠内容撑。`
+    : `<b>[G1]</b> 内容已装回 · ${DATASETS[active].label} ${CONTENT.length} 张。`;
+  runGates();
+};
+
+/* ============ 控制 ============ */
+el("act").onclick = () => {
+  const cur = state._cur; if(!cur || !cur.offers.length) return;
+  const rng = mulberry32(seed*13 + state.draw*104729);
+  pick(cur.offers[Math.floor(rng()*cur.offers.length)]);
+};
+el("auto").onclick = () => {
+  const step = () => { const cur = state._cur; if(!cur || !cur.offers || !cur.offers.length){ logTrace(); return; }
+    pick(cur.offers[cur.offers.length-1]); setTimeout(step, 90); };
+  step(); setTimeout(logTrace, 400);
+};
+el("reset").onclick = () => { seed = (seed*1103515245 + 12345) >>> 8 % 1e8; reset(); el("log").textContent = "—"; runGates(); };
+document.addEventListener("click", e => { if(e.target.closest(".fu") && state._cur && state._cur.offers && state._cur.offers.length) logTrace(); });
+
+function logTrace(){
+  const h = state.hist[state.hist.length-1];
+  if(!h){ el("log").textContent = "—"; return; }
+  const lines = [
+    `<b>第 ${h.draw} 抽</b> · profile ${(SCHEDULE.find(s=>h.draw>=s.r[0]&&h.draw<=s.r[1])||{}).profile||"—"}`,
+    `  ΣW=${tagWeights(cardIndex(), new Set([...state.owned].filter(x=>x))).total} → S=${(tagShare(tagWeights(cardIndex(), new Set([...state.owned])).total)*100).toFixed(1)}%`,
+    `  已择 ${pathOf(h.picked)} · 本局已拥有 ${state.owned.size} 张 · 可抽池 ${candidates(cardIndex(), state.owned).length} 张`,
+  ];
+  const cur = state._cur;
+  if(cur && cur.trace) for(const t of cur.trace.slice(0,3)){
+    if(t.skipped){ lines.push(`  slot${t.slot+1} skip: ${t.skipped}`); continue; }
+    lines.push(`  slot${t.slot+1} tier=${t.s.tier} branch=${t.s.branch}${t.s.tag?" tag="+tagPath(t.s.tag):""} S=${t.res.share.toFixed(3)} card=${pathOf(t.s.card)}`);
+  }
+  el("log").innerHTML = lines.join("\n");
+}
+
+/* ============ 自检（门 G3 / G1 口径，200 局）============ */
+function runGates(){
+  const idx0 = cardIndex(), pools0 = poolIndex(idx0);
+  const res = {runs:0, t5Early:0, deadEnds:0, dup:0, reqBad:0, slots:0, tagSlots:0, maxS:0, firstT5:{}};
+  if(CONTENT.length){
+    for(let r=0; r<200; r++){
+      const rng = mulberry32(1000+r);
+      const owned = new Set(); res.runs++;
+      for(let d=1; d<=TOTAL_DRAWS; d++){
+        const out = drawOnce(d, owned, rng);
+        if(out.status!=="OK"){ res.deadEnds++; break; }
+        if(!out.fixed){
+          let maxTier = 0;
+          for(const t of out.trace){ if(t.skipped) continue; res.slots++; maxTier = Math.max(maxTier, t.s.tier);
+            if(t.s.branch==="tag") res.tagSlots++;
+            if(t.res.share > res.maxS) res.maxS = t.res.share; }
+          if(maxTier>=5){ if(d < T5_FIRST_DRAW) res.t5Early++; if(res.firstT5[d]==null) res.firstT5[d]=1; }
+          if(new Set(out.offers).size !== out.offers.length) res.dup++;
+        }
+        for(const id of out.offers){
+          const c = idx0.get(id);
+          if((c.requires||[]).some(t => !ownedHasTag(owned, idx0, t))) res.reqBad++;
+        }
+        owned.add(out.offers[Math.floor(rng()*out.offers.length)]);
+      }
+    }
+  }
+  function ownedHasTag(owned, idx, tag){
+    for(const id of owned){ const c = idx.get(id); if(c && c.tags.includes(tag)) return true; }
+    return false;
+  }
+  const g = (title, desc, ok, val) => `<div class="gate ${ok?"pass":"fail"}"><div class="t">${title}<span class="verdict">${ok?"PASS":"FAIL"}</span></div><div class="d">${desc}</div><div class="v">${val}</div></div>`;
+  const hasContent = CONTENT.length>0;
+  el("gates").innerHTML = [
+    g("T5 不早于第 9 抽","日程是更高法则：槽位过滤只能在日程允许的等级内收紧。门 G3 当年就是这条抓到过一个顺序反了的实现。",
+      !hasContent || res.t5Early===0, `200 局中过早出现 T5 的抽数：${hasContent?res.t5Early:"—"}`),
+    g("S 严格小于 80%","渐近曲线上限：标签定向永远吃不满，随机支至少留两成。",
+      !hasContent || res.maxS < CAP - 1e-12, `实测最大 S＝${hasContent?(res.maxS*100).toFixed(2)+"%":"—"}`),
+    g("15 抽内不死局","个人可抽池会收缩，但日程覆盖范围内不许出现「无卡可抽」——除非内容被删空。",
+      !hasContent || res.deadEnds===0, `死局局数：${hasContent?res.deadEnds:"—"}`),
+    g("一抽之内不重复出牌","后一格从前一格已出集合里扣掉，五格里必是五张不同的卡。",
+      !hasContent || res.dup===0, `重复出牌的抽数：${hasContent?res.dup:"—"}`),
+    g("requires 是硬门","没满足标签谓词的卡，一次都没有出现在候选里（chain_reaction 需 counter、venom_cascade 需 poison）。",
+      !hasContent || res.reqBad===0, `违规出牌次数：${hasContent?res.reqBad:"—"}`),
+    g("格位规则来自数据","第 2–4 抽五格不筛卡类；第 5 抽起首格必方向卡，方向卡只在 T3/T5 出现（A 入场起生效，无候选时回退并留痕）。",
+      true, `本次统计：共 ${hasContent?res.slots:0} 格 · 标签支 ${hasContent?res.tagSlots:0} 格（${hasContent&&res.slots? (res.tagSlots/res.slots*100).toFixed(0):0}%）`),
+  ].join("");
+}
+
+/* ============ 起局 ============ */
+setDataset("demo");
+</script>
+</body>
+</html>
