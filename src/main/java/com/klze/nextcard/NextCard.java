@@ -2,6 +2,7 @@ package com.klze.nextcard;
 
 import com.klze.nextcard.client.ClientSetup;
 import com.klze.nextcard.common.config.ModCommonConfig;
+import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.network.ModNetwork;
 import com.klze.nextcard.common.registry.ModBlocks;
 import com.klze.nextcard.common.registry.ModCreativeTabs;
@@ -42,6 +43,10 @@ public class NextCard {
         if (FMLEnvironment.dist.isClient()) {
             ClientSetup.init(modEventBus);
         }
+
+        // Content reload lives on the game bus (reload listeners are added per datapack reload,
+        // not per mod-bus registry event) - registering it here is what makes /reload take effect.
+        CardContentReload.register();
 
         LOGGER.info("{} loaded", MODID);
     }

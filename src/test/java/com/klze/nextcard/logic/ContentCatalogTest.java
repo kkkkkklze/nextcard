@@ -70,4 +70,20 @@ public class ContentCatalogTest {
             assertTrue(result.value().isEmpty(), key + " 不该留下半成品");
         }
     }
+
+    /**
+     * 不同 ResourceManager 实现给的路径形状不一样（vanilla 的 fileToId 剥掉目录前缀但保留嵌套目录）。
+     * 两种都必须归一到同一个键，否则同一张卡会随运行环境时灵时不灵。
+     */
+    @Test
+    public void pathShapesFromEitherResourceManagerLandOnOneKey() {
+        assertEquals("nextcard:cards/iron_wall_grip.json",
+                ContentCatalog.keyFromPath("nextcard", "cards", "cards/iron_wall_grip.json"));
+        assertEquals("nextcard:cards/iron_wall_grip.json",
+                ContentCatalog.keyFromPath("nextcard", "cards", "iron_wall_grip.json"));
+        assertEquals("nextcard:cards/wild_swing.json",
+                ContentCatalog.keyFromPath("nextcard", "cards", "cards/multistrike/wild_swing.json"));
+        assertEquals("nextcard:cards/no_ext",
+                ContentCatalog.keyFromPath("nextcard", "cards", "cards/no_ext"));
+    }
 }

@@ -39,6 +39,24 @@ public final class ContentCatalog {
         return namespace + ":" + dir + "/" + fileName + ".json";
     }
 
+    /**
+     * 把 {@code ResourceManager} 给的路径规范化成 {@link #keyOf} 的形状。
+     *
+     * <p>为什么要单独一步：不同 {@code ResourceManager} 实现返回的键有的带目录前缀、有的已经剥掉
+     * （vanilla 的 {@code FileToIdConverter.fileToId} 会剥），而且剥完仍然保留嵌套目录
+     * （{@code multistrike/wild_swing}）。这里两种都吃，只认最后一个文件名段——因为引擎的 id
+     * 就是文件名段，目录只是内容的摆放方式。</p>
+     */
+    public static String keyFromPath(String namespace, String dir, String resourcePath) {
+        String path = resourcePath.startsWith(dir + "/") ? resourcePath.substring(dir.length() + 1) : resourcePath;
+        int slash = path.lastIndexOf('/');
+        String file = (slash < 0 ? path : path.substring(slash + 1));
+        if (!file.endsWith(".json") || file.length() <= ".json".length()) {
+            return namespace + ":" + dir + "/" + file;      // 交给 collect 报 malformed，不在这里静默丢
+        }
+        return namespace + ":" + dir + "/" + file.substring(0, file.length() - ".json".length()) + ".json";
+    }
+
     /** 收成 {@link ContentReader} 能吃的 Map，并拒绝任何 id 撞车。 */
     public static LoadResult<Map<String, JsonObject>> collect(List<Entry> entries) {
         List<String> errors = new ArrayList<>();
