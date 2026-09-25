@@ -35,7 +35,7 @@ public class ContentParityTest {
 
     private static Path contentDir() {
         String value = System.getProperty("nextcard.content.dir");
-        assertTrue(value != null, "nextcard.content.dir must be provided by the logicTest task");
+        assertTrue(value != null, "nextcard.content.dir must be provided by the logicTest or test task");
         return Path.of(value);
     }
 
