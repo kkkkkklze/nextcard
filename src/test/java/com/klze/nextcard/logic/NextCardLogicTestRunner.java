@@ -32,6 +32,7 @@ public final class NextCardLogicTestRunner {
             CadenceTest.class,
             EffectHostTest.class,
             ContentCatalogTest.class,
+            CardLedgerTest.class,
     };
 
     private NextCardLogicTestRunner() {
