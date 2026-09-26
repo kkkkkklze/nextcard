@@ -2,12 +2,17 @@ package com.klze.nextcard.gametest;
 
 import com.klze.nextcard.NextCard;
 import com.klze.nextcard.common.load.CardContentReload;
+import com.klze.nextcard.common.player.PlayerCardState;
+import com.klze.nextcard.core.player.CardLedger;
 import com.klze.nextcard.common.load.ContentBundle;
 import com.klze.nextcard.common.registry.ModBlocks;
 import com.klze.nextcard.common.registry.ModCreativeTabs;
 import com.klze.nextcard.common.registry.ModItems;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.gametest.GameTestHolder;
@@ -59,6 +64,36 @@ public class NextCardGameTests {
         helper.assertTrue(loaded.tagFiles() == tagFilesOnDisk,
                 "加载标签数 " + loaded.tagFiles() + " 与磁盘文件数 " + tagFilesOnDisk + " 不一致");
         helper.assertTrue(!loaded.isEmpty(), "reload 监听器必须已经换过表（空表=没挂上或整次失败）");
+
+        helper.succeed();
+    }
+
+    /**
+     * 卡账 capability 真挂在玩家身上，并且写档/读档对得上。
+     *
+     * <p>{@code of()} 返回 null 代表"根本没挂上"——那只会在挂错总线或没注册时发生，
+     * 而它的表现是"玩家莫名其妙没卡"，所以这里第一刀就砍在它身上。第三条断言防的是
+     * "读档累加"：同一份 NBT 读两次必须还是同一份账。</p>
+     */
+    @GameTest
+    public void playerCardStateRoundTripsThroughNbt(GameTestHelper helper) {
+        Player player = helper.makeMockSurvivalPlayer();
+        CardLedger ledger = PlayerCardState.of(player);
+        helper.assertTrue(ledger != null, "card capability 必须挂在玩家身上（null = 没注册或挂错总线）");
+
+        ResourceLocation card = CardContentReload.current().cards().byId().keySet().iterator().next();
+        ledger.grant(card);
+        ledger.recordDraw();
+        CompoundTag saved = PlayerCardState.saveOf(ledger);
+
+        CardLedger reloaded = new CardLedger();
+        PlayerCardState.loadInto(reloaded, saved);
+        helper.assertTrue(reloaded.owns(card), "写进去的卡要读得回来");
+        helper.assertTrue(reloaded.drawCount() == 1, "抽卡次数要跟着往返：" + reloaded.drawCount());
+
+        PlayerCardState.loadInto(reloaded, saved);
+        helper.assertTrue(reloaded.size() == 1, "同一份档读两次不能翻倍：" + reloaded.size());
+        helper.assertTrue(reloaded.drawCount() == 1, "抽卡次数也不能累加：" + reloaded.drawCount());
 
         helper.succeed();
     }

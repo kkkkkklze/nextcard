@@ -117,20 +117,33 @@ public final class CardLedger {
     public static CardLedger fromText(List<String> ownedIds, int drawCount, Map<String, Integer> counters,
                                       Set<ResourceLocation> knownIds) {
         CardLedger ledger = new CardLedger();
-        ledger.drawCount = Math.max(0, drawCount);
+        ledger.loadFrom(ownedIds, drawCount, counters, knownIds);
+        return ledger;
+    }
+
+    /**
+     * 就地装载一份存档。capability 的 {@code deserializeNBT} 必须走这条——换实例会让别人手里
+     * 拿着的那个对象停在旧值上，是"读档后状态不对"最省事的成因。
+     */
+    public void loadFrom(List<String> ownedIds, int loadedDrawCount, Map<String, Integer> loadedCounters,
+                         Set<ResourceLocation> knownIds) {
+        owned.clear();
+        unparsed.clear();
+        unknownOnLoad.clear();
+        counters.clear();
+        drawCount = Math.max(0, loadedDrawCount);
         for (String raw : ownedIds) {
             ResourceLocation parsed = ResourceLocation.tryParse(raw);
             if (parsed == null) {
-                ledger.unknownOnLoad.add(raw);
-                ledger.unparsed.add(raw);
+                unknownOnLoad.add(raw);
+                unparsed.add(raw);
                 continue;
             }
             if (knownIds != null && !knownIds.contains(parsed)) {
-                ledger.unknownOnLoad.add(raw);
+                unknownOnLoad.add(raw);
             }
-            ledger.owned.add(parsed);
+            owned.add(parsed);
         }
-        ledger.counters.putAll(counters);
-        return ledger;
+        counters.putAll(loadedCounters);
     }
 }
