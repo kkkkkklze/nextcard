@@ -93,8 +93,21 @@ public record Action(String type, JsonObject body) {
                 return null;
             }
         }
+        if (type.equals("damage")) {
+            String basis = body.get("basis").getAsString();
+            if (!DAMAGE_BASIS.contains(basis)) {
+                errors.add("action damage basis must be one of " + DAMAGE_BASIS + ", got " + basis);
+                return null;
+            }
+        }
         return new Action(type, body);
     }
+
+    /**
+     * {@code damage} 允许的基数。写错基数不能"按 0 算"——那会让一张卡看起来完全没伤害，
+     * 也不能被当成"以这一发为基数"（那是另一种乘区解释）。
+     */
+    public static final Set<String> DAMAGE_BASIS = Set.of("armor", "attack", "incoming", "const");
 
     /** 引用型动作指向的 id（叠层 id），供加载期跨卡校验。 */
     public String referencedStackId() {

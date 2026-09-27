@@ -4,7 +4,27 @@
   "tags": [
     "nextcard:attack"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "trigger",
+      "on": "hit",
+      "actions": [
+        {
+          "damage": {
+            "basis": "attack",
+            "coefficient": 0.6,
+            "radius": 4.0
+          }
+        },
+        {
+          "knockback": {
+            "strength": 0.6,
+            "radius": 4.0
+          }
+        }
+      ]
+    }
+  ],
   "name": "card.nextcard.storm_pulse",
   "texture": "storm_pulse"
 }

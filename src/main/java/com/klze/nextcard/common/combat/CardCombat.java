@@ -12,8 +12,10 @@ import com.klze.nextcard.core.effect.Predicates;
 import com.klze.nextcard.core.effect.Settlement;
 import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.player.CardLedger;
+import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.event.entity.living.LivingDamageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
@@ -75,23 +77,79 @@ public final class CardCombat {
 
     @SubscribeEvent
     public static void onLivingDamage(LivingDamageEvent event) {
-        Entity source = event.getSource().getEntity();
+        DamageSource damageSource = event.getSource();
+        Entity source = damageSource.getEntity();
         LivingEntity victim = event.getEntity();
         State attacker = stateOf(source);
         State defender = stateOf(victim);
         double incoming = event.getAmount();
-        Triggers.Result onTaken = fire(defender, DamageContact.defendView(victim, source, incoming),
-                Triggers.DAMAGE_TAKEN);
-        Settlement.Result result = settle(attacker == null ? null : attacker.profile(),
-                DamageContact.attackView(source, victim),
+        Facts defenceView = DamageContact.defendView(victim, source, incoming);
+        Facts attackView = DamageContact.attackView(source, victim);
+
+        Triggers.Result onTaken = fire(defender, defenceView, Triggers.DAMAGE_TAKEN,
+                basesOf(defender, incoming));
+        Settlement.Result result = settle(attacker == null ? null : attacker.profile(), attackView,
                 defender == null ? null : defender.profile(), onTaken.vetoReason(), incoming);
         if (result != null) {
             event.setAmount((float) result.value());
             pipelineRuns++;
             lastTrace = result.trace();
         }
-        // 攻方的"命中时"在结算之后才兑现：这一发的数已经定了，攒下的层给下一发用
-        fire(attacker, DamageContact.attackView(source, victim), Triggers.HIT);
+        perform(defender, victim, onTaken);
+
+        // 攻方的"命中时"排在结算之后：这一发的数已经定了，攒下的层与补出去的伤害给下一发用。
+        // 我们自己补的那一发不再叫醒攻方触发器——否则 damage → hit → damage 一路递归到栈溢出。
+        if (!CardDamageSource.isEngineExtra(damageSource)) {
+            Triggers.Result onHit = fire(attacker, attackView, Triggers.HIT, basesOf(attacker, incoming));
+            perform(attacker, victim, onHit);
+        }
+    }
+
+    /**
+     * 把计划里"要落到世界上"的那部分落掉：独立伤害与击退。
+     *
+     * <p>半径 0 只碰直接目标；写了半径就以<em>持卡人</em>为圆心找活物（不打自己、不打队友）。
+     * 独立伤害走 {@link CardDamageSource}，所以它会正常再过一遍目标的护甲与减免——
+     * 它是新的一发，不是把刚才那个数再乘一遍。</p>
+     */
+    private static void perform(@Nullable State actor, LivingEntity directTarget, Triggers.Result result) {
+        if (actor == null || result.extraHits().isEmpty() && result.knockbacks().isEmpty()) {
+            return;
+        }
+        Player owner = actor.player();
+        for (Triggers.ExtraHit hit : result.extraHits()) {
+            for (LivingEntity target : around(owner, directTarget, hit.radius())) {
+                target.hurt(new CardDamageSource(hit.cardId(), owner, hit.attribution()), (float) hit.amount());
+            }
+        }
+        for (Triggers.KnockbackHit knock : result.knockbacks()) {
+            for (LivingEntity target : around(owner, directTarget, knock.radius())) {
+                target.knockback(knock.strength(), -Math.sin(Math.toRadians(owner.getYRot())),
+                        Math.cos(Math.toRadians(owner.getYRot())));
+            }
+        }
+    }
+
+    private static List<LivingEntity> around(Player owner, LivingEntity directTarget, double radius) {
+        if (radius <= 0.0) {
+            return List.of(directTarget);
+        }
+        return owner.level().getEntitiesOfClass(LivingEntity.class,
+                owner.getBoundingBox().inflate(radius),
+                other -> other != owner && other.isAlive() && !owner.isAlliedTo(other))
+                .stream().filter(other -> owner.distanceTo(other) <= radius).toList();
+    }
+
+    /** 动作可用的基数（护甲值 / 攻击力 / 这一发的量），只有这里读世界。 */
+    private static Triggers.Bases basesOf(@Nullable State state, double incoming) {
+        if (state == null) {
+            return Triggers.Bases.NONE;
+        }
+        Player owner = state.player();
+        // "护甲值"取 ARMOR 属性而不是装备栏的护甲点数：卡面 channel.armor 改的就是前者，
+        // 取后者的话"+20 护甲值"那类附带数值根本进不了基数
+        return new Triggers.Bases(owner.getAttributeValue(Attributes.ARMOR),
+                owner.getAttributeValue(Attributes.ATTACK_DAMAGE), incoming);
     }
 
     /**
@@ -101,12 +159,13 @@ public final class CardCombat {
      * 不重算会停在旧层数上（玩家看到的"层数在涨、减伤没动"就是这么来的）；
      * ② 引擎还没有执行器的动作要<em>报出来</em>，每个只报一次，不许静默跳过。</p>
      */
-    public static Triggers.Result fire(@Nullable State state, @Nullable Facts facts, String event) {
+    public static Triggers.Result fire(@Nullable State state, @Nullable Facts facts, String event,
+                                       Triggers.Bases bases) {
         if (state == null || state.triggers().isEmpty() || facts == null) {
             return Triggers.Result.NOTHING;
         }
         Triggers.Result result = Triggers.fire(event, state.holder(), facts, state.triggers(),
-                HOST.counters(), HOST.declaredStacks(), state.profile(), state.nowSeconds());
+                HOST.counters(), HOST.declaredStacks(), state.profile(), bases, state.nowSeconds());
         for (String unsupported : result.unsupported()) {
             if (REPORTED_UNSUPPORTED.add(unsupported)) {
                 NextCard.LOGGER.warn("[nextcard] {}", unsupported);
@@ -125,7 +184,7 @@ public final class CardCombat {
      * @param nowSeconds 世界时刻（秒），与 {@code CounterStore} 同一口径
      */
     public record State(String holder, @Nullable MechanicProfile profile, List<Triggers.Bound> triggers,
-                        double nowSeconds) {
+                        Player player, double nowSeconds) {
     }
 
     /** 谁的卡账折出来的生效状态；没有玩家身份、没卡时给 null。 */
@@ -143,7 +202,7 @@ public final class CardCombat {
         HOST.flush(List.of());
         MechanicProfile profile = HOST.profile(holder);
         return new State(holder, profile.slotIds().isEmpty() ? null : profile, HOST.triggers(holder),
-                player.level().getGameTime() / 20.0);
+                player, player.level().getGameTime() / 20.0);
     }
 
     /**

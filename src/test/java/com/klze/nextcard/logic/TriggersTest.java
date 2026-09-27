@@ -54,7 +54,13 @@ public class TriggersTest {
     private static Triggers.Result fire(String event, Facts facts, List<Triggers.Bound> bound,
                                        CounterStore counters, Map<String, StackClause> declared,
                                        MechanicProfile profile, double now) {
-        return Triggers.fire(event, HOLDER, facts, bound, counters, declared, profile, now);
+        return fire(event, facts, bound, counters, declared, profile, Triggers.Bases.NONE, now);
+    }
+
+    private static Triggers.Result fire(String event, Facts facts, List<Triggers.Bound> bound,
+                                       CounterStore counters, Map<String, StackClause> declared,
+                                       MechanicProfile profile, Triggers.Bases bases, double now) {
+        return Triggers.fire(event, HOLDER, facts, bound, counters, declared, profile, bases, now);
     }
 
     private static Facts fatal(double ownHpRatio) {
@@ -226,7 +232,7 @@ public class TriggersTest {
         assertEquals(0.0, reduction, 1e-9, "一层都还没有");
 
         Triggers.Result fired = Triggers.fire(Triggers.HIT, HOLDER, Facts.NONE, host.triggers(HOLDER),
-                host.counters(), host.declaredStacks(), host.profile(HOLDER), 0.0);
+                host.counters(), host.declaredStacks(), host.profile(HOLDER), Triggers.Bases.NONE, 0.0);
         assertEquals(1, fired.fired().size(), fired.toString());
         assertEquals(1.0, Triggers.layers(host.counters(), HOLDER, "wall"));
 
@@ -265,6 +271,48 @@ public class TriggersTest {
         assertTrue(Triggers.isFatal(10.0, 10.0), "正好打死也算致命");
         assertTrue(Triggers.isFatal(10.0, 10.5));
         assertTrue(!Triggers.isFatal(10.0, 9.9));
+    }
+
+    /** 独立伤害只按<b>基数 × 系数</b>算：它不是把刚才那一发再乘一遍，所以基数与乘区无关。 */
+    @Test
+    public void extraDamageIsPlannedFromBasesNotFromTheSettledNumber() {
+        CounterStore counters = new CounterStore();
+        List<Triggers.Bound> bound = List.of(bound("shockwave", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"damage\":{\"basis\":\"armor\",\"coefficient\":0.5,\"radius\":3.5}},"
+                + " {\"damage\":{\"basis\":\"const\",\"coefficient\":2.0}},"
+                + " {\"knockback\":{\"strength\":1.2,\"radius\":2}}]}"));
+        Triggers.Result result = fire(Triggers.HIT, Facts.NONE, bound, counters, Map.of(), null,
+                new Triggers.Bases(20.0, 7.0, 99.0), 0.0);
+
+        assertEquals(2, result.extraHits().size(), result.extraHits().toString());
+        assertEquals(10.0, result.extraHits().get(0).amount(), 1e-9, "护甲 20 × 0.5");
+        assertEquals(3.5, result.extraHits().get(0).radius(), 1e-9, "半径要交出去，找目标在世界侧做");
+        assertTrue(result.extraHits().get(0).attribution().contains("护甲值"),
+                result.extraHits().get(0).attribution());
+        assertEquals(2.0, result.extraHits().get(1).amount(), 1e-9, "const 就是系数本身，不乘 incoming");
+        assertEquals(1, result.knockbacks().size());
+        assertEquals(1.2, result.knockbacks().get(0).strength(), 1e-9);
+    }
+
+    /** 基数算出 0、或半径要随叠层涨：都报出来，不静默按 0 打一发。 */
+    @Test
+    public void aZeroBasisOrAnUndeclaredRadiusSourceIsReported() {
+        CounterStore counters = new CounterStore();
+        List<Triggers.Bound> noArmor = List.of(bound("shockwave", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"damage\":{\"basis\":\"armor\",\"coefficient\":0.5}}]}"));
+        Triggers.Result bare = fire(Triggers.HIT, Facts.NONE, noArmor, counters, Map.of(), null,
+                Triggers.Bases.NONE, 0.0);
+        assertTrue(bare.extraHits().isEmpty());
+        assertTrue(bare.unsupported().toString().contains("= 0"),
+                "0 伤害要说明是基数为 0，不是没生效: " + bare.unsupported());
+
+        List<Triggers.Bound> perStack = List.of(bound("growth", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"damage\":{\"basis\":\"attack\",\"coefficient\":1.0,"
+                + " \"radius_per_stack\":0.5}}]}"));
+        Triggers.Result grown = fire(Triggers.HIT, Facts.NONE, perStack, counters, Map.of(), null,
+                new Triggers.Bases(0.0, 5.0, 0.0), 0.0);
+        assertTrue(grown.extraHits().isEmpty(), "半径随哪条叠层涨还没定，不能猜");
+        assertTrue(grown.unsupported().toString().contains("radius_per_stack"), grown.unsupported().toString());
     }
 
     // —— 夹具 ——

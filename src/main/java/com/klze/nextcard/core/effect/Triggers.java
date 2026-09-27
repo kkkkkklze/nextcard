@@ -40,6 +40,12 @@ public final class Triggers {
     /** 动作：加 / 扣叠层。 */
     public static final String STACKS = "stacks";
 
+    /** 动作：补一次独立伤害（基数 × 系数）。 */
+    public static final String DAMAGE = "damage";
+
+    /** 动作：把目标推开。 */
+    public static final String KNOCKBACK = "knockback";
+
     /** 引擎自有资源的命名空间（冷却、在途窗口都归它）。 */
     public static final String COOLDOWN_PREFIX = "trigger.";
 
@@ -52,20 +58,60 @@ public final class Triggers {
     }
 
     /**
+     * 动作可用的<b>基数</b>：由接管点从世界读好交进来（护甲值 / 攻击力 / 这一发的量）。
+     *
+     * <p>为什么不在执行器里读实体：那样就没法无头断言"以护甲值为基数"到底乘了几遍。
+     * {@code const} 走 {@link #of} 里的 1.0——卡面写 {@code coefficient} 就是那个数本身。</p>
+     */
+    public record Bases(double armor, double attack, double incoming) {
+
+        public static final Bases NONE = new Bases(0.0, 0.0, 0.0);
+
+        public double of(String basis) {
+            return switch (basis) {
+                case "armor" -> armor;
+                case "attack" -> attack;
+                case "incoming" -> incoming;
+                default -> 1.0;
+            };
+        }
+    }
+
+    /**
+     * 要补的一次<b>独立</b>伤害（由接管点去落：找半径内的目标、用自己的 DamageSource）。
+     *
+     * <p>"独立"指的是<em>另起一发</em>：它会完整再过一次两条管线（攻方乘区照乘、守方减免照算），
+     * 这正是《00》"以护甲值为基数的完整乘区"要的形状；它<em>不并进</em>原来那一发的数里，
+     * 所以同一个乘区对同一个数字不会生效两遍。谁去保证不递归：接管点认 {@code CardDamageSource}，
+     * 自己发出去的命中不再叫醒攻方触发器。</p>
+     */
+    public record ExtraHit(ResourceLocation cardId, double amount, double radius, String attribution) {
+    }
+
+    /** 要把目标推开多少（半径 0 = 只推直接目标）。 */
+    public record KnockbackHit(ResourceLocation cardId, double strength, double radius, String attribution) {
+    }
+
+    /**
      * 一次事件的全部结果。
      *
      * @param vetoReason  守方管线第①步要用的否决理由（没有任何免疫成立时为 null）
-     * @param fired       真的执行掉了什么（带归因，调试命令与测试都读它）
+     * @param fired       引擎自己就已经做完的动作（免疫记账、层数增减）
+     * @param extraHits   要接管点去落地的独立伤害
+     * @param knockbacks  要接管点去落地的击退
      * @param unsupported 解析通过但引擎还不执行的动作——必须让内容侧看得见
      */
-    public record Result(@Nullable String vetoReason, List<Firing> fired, List<String> unsupported) {
+    public record Result(@Nullable String vetoReason, List<Firing> fired, List<ExtraHit> extraHits,
+                         List<KnockbackHit> knockbacks, List<String> unsupported) {
 
         public Result {
             fired = List.copyOf(fired);
+            extraHits = List.copyOf(extraHits);
+            knockbacks = List.copyOf(knockbacks);
             unsupported = List.copyOf(unsupported);
         }
 
-        public static final Result NOTHING = new Result(null, List.of(), List.of());
+        public static final Result NOTHING = new Result(null, List.of(), List.of(), List.of(), List.of());
     }
 
     private Triggers() {
@@ -99,11 +145,13 @@ public final class Triggers {
      */
     public static Result fire(String event, String holder, Facts facts, List<Bound> bound,
                              CounterStore counters, Map<String, StackClause> declared,
-                             @Nullable MechanicProfile profile, double nowSeconds) {
+                             @Nullable MechanicProfile profile, Bases bases, double nowSeconds) {
         List<Bound> ordered = new ArrayList<>(bound);
         ordered.sort((left, right) -> left.cardId().compareTo(right.cardId()));
         String veto = null;
         List<Firing> fired = new ArrayList<>();
+        List<ExtraHit> extraHits = new ArrayList<>();
+        List<KnockbackHit> knockbacks = new ArrayList<>();
         List<String> unsupported = new ArrayList<>();
         for (Bound entry : ordered) {
             TriggerClause clause = entry.clause();
@@ -132,12 +180,62 @@ public final class Triggers {
                             fired.add(new Firing(entry.cardId(), action, reason));
                         }
                     }
+                    case DAMAGE -> {
+                        String skipped = planDamage(entry, action, bases, unsupported, extraHits);
+                        if (skipped != null) {
+                            fired.add(new Firing(entry.cardId(), action, skipped));
+                        }
+                    }
+                    case KNOCKBACK -> {
+                        String reason = planKnockback(entry, action, bases, knockbacks);
+                        fired.add(new Firing(entry.cardId(), action, reason));
+                    }
                     default -> unsupported.add(entry.cardId() + " 的 " + action.type()
                             + "（词表里有，引擎还没有执行器）");
                 }
             }
         }
-        return new Result(veto, fired, unsupported);
+        return new Result(veto, fired, extraHits, knockbacks, unsupported);
+    }
+
+    /** 独立伤害：基数 × 系数。{@code radius_per_stack} 还没有对应叠层，报出来而不是按 0 算。 */
+    private static @Nullable String planDamage(Bound entry, Action action, Bases bases,
+                                              List<String> unsupported, List<ExtraHit> out) {
+        if (action.body().has("radius_per_stack")) {
+            unsupported.add(entry.cardId() + " 的 damage.radius_per_stack（半径随哪条叠层涨还没定）");
+            return null;
+        }
+        String basis = action.body().get("basis").getAsString();
+        double coefficient = action.number("coefficient", 0.0);
+        double amount = bases.of(basis) * coefficient;
+        if (!(amount > 0)) {
+            // 基数为 0（没穿甲、系数给 0）是合法结果，但要说出来：否则"没伤害"看起来像"没生效"
+            unsupported.add(entry.cardId() + " 的 damage：基数 " + basis + " × 系数 " + coefficient + " = 0");
+            return null;
+        }
+        out.add(new ExtraHit(entry.cardId(), amount, Math.max(0.0, action.number("radius", 0.0)),
+                "以" + basisText(basis) + "为基数 ×" + coefficient));
+        return "补一次 " + rounded(amount) + " 点独立伤害（" + basisText(basis) + " × " + coefficient + "）";
+    }
+
+    private static String planKnockback(Bound entry, Action action, Bases bases, List<KnockbackHit> out) {
+        double strength = action.number("strength", 0.0);
+        double radius = Math.max(0.0, action.number("radius", 0.0));
+        out.add(new KnockbackHit(entry.cardId(), strength, radius, "击退 " + strength));
+        return "把目标推开 " + strength + "（半径 " + radius + " 格）";
+    }
+
+    private static String basisText(String basis) {
+        return switch (basis) {
+            case "armor" -> "护甲值";
+            case "attack" -> "攻击力";
+            case "incoming" -> "这一发的量";
+            default -> "常数";
+        };
+    }
+
+    private static String rounded(double value) {
+        return String.valueOf(Math.round(value * 100.0) / 100.0);
     }
 
     /** @return 兑现理由；不成立（不致命 / 冷却在途）时给 null，并且<em>不动账本</em> */

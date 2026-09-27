@@ -10,12 +10,15 @@ import com.klze.nextcard.common.load.ContentBundle;
 import com.klze.nextcard.common.registry.ModBlocks;
 import com.klze.nextcard.common.registry.ModCreativeTabs;
 import com.klze.nextcard.common.registry.ModItems;
+import net.minecraft.core.BlockPos;
 import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.EntityType;
+import net.minecraft.world.entity.monster.Zombie;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraftforge.gametest.GameTestHolder;
@@ -176,6 +179,49 @@ public class NextCardGameTests {
         dealtTo(dummy, striker, 1.0F);   // 只够攒层、不至于把靶子打死（死了的实体不会再触发兑现）
         helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "root") == 3.0,
                 "声明的上限是 3 层，涨到那就停：" + Triggers.layers(CardCombat.HOST.counters(), holder, "root"));
+
+        helper.succeed();
+    }
+
+    /**
+     * 「风暴脉冲」的独立伤害与击退在世界里落到半径内的<em>第二个</em>目标上，并且不递归。
+     *
+     * <p>三个目标各自要证的事：① 没被直接打到的那只也掉了血 → 半径找目标真的跑了；
+     * ② 掉的是<em>一发</em>的量（&lt; 2 点）→ {@code damage → hit → damage} 那条递归被
+     * {@link CardDamageSource} 拦住了（拦不住的话这里不是红，是整条测试炸栈）；
+     * ③ 那只同时被推动了，而它从没被直接攻击过 → 击退这条分支也真的落了地。</p>
+     *
+     * <p>反过来，<b>直接目标只吃到普通一击</b>：原版无敌帧（{@code invulnerableTime}）会把同一刻
+     * 打到同一只的第二发吃掉，所以冲击波对刚被打中的目标不叠加。这是<em>顺带验实的现行行为</em>，
+     * 不是漏了什么——要改它得给 damage_type 加 BYPASSES_COOLDOWN 标签，那属于玩法决定，
+     * 得内容侧点头才动（见 {@link CardDamageSource} 的注释）。</p>
+     */
+    @GameTest
+    public void shockwaveHitsANeighbourOnceAndDoesNotRecurse(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "storm_pulse");
+        net.minecraft.world.phys.Vec3 anchor = helper.absoluteVec(new net.minecraft.world.phys.Vec3(0.5, 1.0, 0.5));
+        striker.setPos(anchor.x, anchor.y, anchor.z);
+
+        Zombie direct = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, new net.minecraft.core.BlockPos(1, 1, 1));
+        Zombie neighbour = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, new net.minecraft.core.BlockPos(1, 1, 1));
+        direct.setPos(anchor.x, anchor.y, anchor.z + 1.0);
+        neighbour.setPos(anchor.x, anchor.y, anchor.z + 3.0);
+
+        float directBefore = direct.getHealth();
+        float neighbourBefore = neighbour.getHealth();
+        direct.hurt(direct.damageSources().playerAttack(striker), 5.0F);
+        double directLost = directBefore - direct.getHealth();
+        double neighbourLost = neighbourBefore - neighbour.getHealth();
+
+        helper.assertTrue(neighbourLost > 0.0, "半径 4 格内的邻居也该吃到这一发脉冲，实际 " + neighbourLost);
+        helper.assertTrue(neighbourLost < 2.0,
+                "只该吃到一发；吃到 " + neighbourLost + " 说明独立伤害把自己又触发了一次");
+        helper.assertTrue(directLost > 4.0 && directLost < 5.05,
+                "直接目标只吃到普通一击（5 点，被随机护甲削到 " + directLost + "）；脉冲那发被无敌帧吃掉");
+        helper.assertTrue(neighbour.getDeltaMovement().horizontalDistanceSqr() > 0.0,
+                "它从没被直接攻击过，被推动只能是击退动作的功劳");
 
         helper.succeed();
     }
