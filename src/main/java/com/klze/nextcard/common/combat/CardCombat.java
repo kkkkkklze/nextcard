@@ -7,7 +7,9 @@ import com.klze.nextcard.core.effect.AttackPipeline;
 import com.klze.nextcard.core.effect.DefencePipeline;
 import com.klze.nextcard.core.effect.EffectHost;
 import com.klze.nextcard.core.effect.Facts;
+import com.klze.nextcard.core.effect.MechanicClause;
 import com.klze.nextcard.core.effect.MechanicProfile;
+import com.klze.nextcard.core.effect.ParryTiming;
 import com.klze.nextcard.core.effect.Predicates;
 import com.klze.nextcard.core.effect.Settlement;
 import com.klze.nextcard.core.effect.Triggers;
@@ -17,7 +19,9 @@ import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.entity.living.LivingDamageEvent;
+import net.minecraftforge.event.entity.living.ShieldBlockEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -103,6 +107,52 @@ public final class CardCombat {
             Triggers.Result onHit = fire(attacker, attackView, Triggers.HIT, basesOf(attacker, incoming));
             perform(attacker, victim, onHit);
         }
+    }
+
+    /**
+     * 格挡 / 精准格挡事件。挂在 {@link ShieldBlockEvent} 上，不是挂在伤害事件上：原版在
+     * {@code hurt} 内部就把挡下的那部分扣掉了，完全挡住的伤害<em>根本走不到</em>
+     * {@code LivingDamageEvent}——挂错地方就是"盾反永不响"这种最难查的静默。
+     *
+     * <p>用这个事件还省掉一批我们自己重述原版的规则："算不算挡住"（正面半球、不穿盾、
+     * 非穿刺箭）由原版判，我们只往上加一条时机判定：举盾多久了。</p>
+     *
+     * <p>第三道闸门是能力本身：没被授予 {@code parry} 机制就两个事件都不发——挡下近战是原版
+     * 一直在做的事，不是一张卡的触发器。</p>
+     */
+    @SubscribeEvent
+    public static void onShieldBlock(ShieldBlockEvent blocked) {
+        if (!(blocked.getEntity() instanceof Player owner)) {
+            return;
+        }
+        State defender = stateOf(owner);
+        if (defender == null || defender.triggers().isEmpty()) {
+            return;
+        }
+        DamageSource damageSource = blocked.getDamageSource();
+        if (CardDamageSource.isEngineExtra(damageSource)) {
+            return;
+        }
+        MechanicClause parry = HOST.mechanics(defender.holder()).get("parry");
+        if (parry == null) {
+            return;
+        }
+        double incoming = blocked.getOriginalBlockedDamage();
+        MechanicProfile profile = defender.profile() == null ? new MechanicProfile(Map.of())
+                : defender.profile();
+        double window = ParryTiming.windowSeconds(parry.param("base_window", 0.0), profile);
+        String which = ParryTiming.precise(ticksBlocking(owner), window)
+                ? Triggers.PARRY_SUCCESS : Triggers.BLOCK_SUCCESS;
+        Triggers.Result result = fire(defender,
+                DamageContact.defendView(owner, damageSource.getEntity(), incoming), which,
+                basesOf(defender, incoming));
+        perform(defender, owner, result);
+    }
+
+    /** 这次举盾已经举了多少 tick（原版的算法：总时长 − 剩余时长）。 */
+    public static int ticksBlocking(Player player) {
+        ItemStack stack = player.getUseItem();
+        return stack.isEmpty() ? 0 : stack.getUseDuration() - player.getUseItemRemainingTicks();
     }
 
     /**

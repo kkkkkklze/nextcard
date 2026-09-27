@@ -38,6 +38,21 @@ public final class WindowMath {
                 product(modifiers, "window.difficulty", layers));
     }
 
+    /**
+     * 从<b>已经折好的快照</b>算窗口——难度那一段在这里是<em>乘</em>，不是除。
+     *
+     * <p>为什么和 {@link #window} 反着来：{@code window.difficulty} 槽位自己声明的是
+     * {@link Mechanics.Combine#DIVIDE}，折叠时已经把"÷3"落成 1/3 了；这里再除一次就是
+     * 把同一个难度项生效两遍（反过来算会得到 2.4 而不是 0.6，实测过）。
+     * 两种读法都留在这个类里，是为了让"哪一步在折、哪一步在乘"只有一处答案。</p>
+     */
+    public static double windowFromProfile(double base, MechanicProfile profile) {
+        double length = base * (1.0 + profile.number("window.length", 0.0));
+        double withScale = length * profile.number("window.scale", 1.0);
+        double withDifficulty = withScale * profile.number("window.difficulty", 1.0);
+        return Math.max(MIN_WINDOW, withDifficulty);
+    }
+
     /** 某个槽位上所有无条件（或条件已成立）改写的和。 */
     public static double sum(List<ModifierClause> modifiers, String target, ToIntFunction<String> layers) {
         double total = 0.0;

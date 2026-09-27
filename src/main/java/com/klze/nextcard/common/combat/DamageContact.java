@@ -85,6 +85,9 @@ public final class DamageContact {
             if (self.isCrouching()) {
                 builder.with("sneaking");
             }
+            if (self instanceof Player player && player.isBlocking()) {
+                builder.with("blocking");
+            }
         }
         if (other != null) {
             builder.distance(self == null ? 0.0 : self.distanceTo(other))

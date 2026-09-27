@@ -34,6 +34,12 @@ public final class Triggers {
     /** 攻方打中的这一下。 */
     public static final String HIT = "hit";
 
+    /** 守方格挡住了、但没卡在窗口里。 */
+    public static final String BLOCK_SUCCESS = "block_success";
+
+    /** 守方在窗口内举盾挡下这一下（精准格挡）。 */
+    public static final String PARRY_SUCCESS = "parry_success";
+
     /** 动作：免疫这一发致命伤害。 */
     public static final String LETHAL_IMMUNITY = "lethal_immunity";
 

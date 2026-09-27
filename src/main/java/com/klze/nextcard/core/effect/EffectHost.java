@@ -161,6 +161,37 @@ public final class EffectHost {
     }
 
     /**
+     * 这个持有者的卡<b>授予</b>的机制（id → 声明）。没被授予就没有对应能力——
+     * "初始无效果"因此是结构事实，不用卡面文字保证。多张卡各给一个参数时取最宽松的窗口
+     * （与 {@link #declaredStacks()} 同一条"取最宽松"，不另定规则）。
+     */
+    public Map<String, MechanicClause> mechanics(String holder) {
+        Map<String, MechanicClause> granted = new TreeMap<>();
+        CardIndex index = this.index.get();
+        for (ResourceLocation id : owned.getOrDefault(holder, Set.of())) {
+            CardDefinition card = index.byId().get(id);
+            if (card == null) {
+                continue;
+            }
+            for (EffectClause clause : card.effects()) {
+                if (clause instanceof MechanicClause mechanic) {
+                    granted.merge(mechanic.id(), mechanic, EffectHost::widestWindow);
+                }
+            }
+        }
+        return granted;
+    }
+
+    private static MechanicClause widestWindow(MechanicClause left, MechanicClause right) {
+        Map<String, Double> merged = new TreeMap<>();
+        java.util.stream.Stream.concat(left.params().keySet().stream(), right.params().keySet().stream())
+                .distinct().forEach(key -> merged.put(key, Math.max(
+                        left.params().getOrDefault(key, Double.NEGATIVE_INFINITY),
+                        right.params().getOrDefault(key, Double.NEGATIVE_INFINITY))));
+        return new MechanicClause(left.id(), merged);
+    }
+
+    /**
      * 标记某个持有者需要重算。<b>层数变了必须调它</b>：每层映射（{@code per_stack}）折进快照的
      * 值是层数的函数，只标"卡集变了"会让快照停在旧层数上——玩家看到的就是"层数在涨，减伤没动"。
      */

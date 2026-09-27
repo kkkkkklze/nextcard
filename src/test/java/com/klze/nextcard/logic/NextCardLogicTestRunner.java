@@ -39,6 +39,7 @@ public final class NextCardLogicTestRunner {
             PredicateRegistryTest.class,
             CombinatorTest.class,
             TriggersTest.class,
+            ParryTimingTest.class,
     };
 
     private NextCardLogicTestRunner() {

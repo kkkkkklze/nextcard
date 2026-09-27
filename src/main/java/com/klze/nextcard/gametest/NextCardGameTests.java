@@ -226,6 +226,63 @@ public class NextCardGameTests {
         helper.succeed();
     }
 
+    /**
+     * 盾反在世界里跑得通：窗口内挡下 → 精准 → 攒一层壁障；出窗 → 只算普通格挡，不攒。
+     *
+     * <p>"举盾多久"这件事服务端只能靠 tick 推进（原版的 {@code useItemRemaining} 不公开写口），
+     * 所以这里真的让假玩家 tick 几回——先把自己要的前提断言出来（{@code ticksBlocking} 落在
+     * 期望区间内），免得"没攒层"其实是"根本没进入格挡状态"这种假绿。</p>
+     */
+    @GameTest
+    public void parryingWithinTheWindowGrantsTheReward(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player guard = helper.makeMockSurvivalPlayer();
+        grant(helper, guard, "cinder_step");
+        String holder = guard.getUUID().toString();
+        guard.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND,
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.SHIELD));
+        net.minecraft.world.phys.Vec3 at = helper.absoluteVec(new net.minecraft.world.phys.Vec3(0.5, 1.0, 0.5));
+        guard.setPos(at.x, at.y, at.z);
+        Player attacker = helper.makeMockSurvivalPlayer();
+        attacker.setPos(at.x, at.y, at.z + 2.0);  // 正面半球：原版只在正面取消伤害
+        guard.setYRot(0.0F);
+        guard.yHeadRot = 0.0F;  // 朝 +Z，所以 +Z 那边站着的就是正面
+
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 0.0,
+                "开局没有壁障层");
+        guard.startUsingItem(net.minecraft.world.InteractionHand.OFF_HAND);
+        for (int i = 0; i < 6; i++) {
+            guard.tick();
+        }
+        helper.assertTrue(guard.isBlocking(), "举盾 6 tick 后原版应当认他在挡");
+        helper.assertTrue(CardCombat.ticksBlocking(guard) >= 5 && CardCombat.ticksBlocking(guard) <= 8,
+                "窗口是 0.4 秒 = 8 tick，实测 ticksBlocking=" + CardCombat.ticksBlocking(guard));
+
+        dealtTo(guard, attacker, 4.0F);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 1.0,
+                "窗口内挡下要算精准格挡并攒一层壁障");
+
+        // 背后来的一律不算格挡：原版举盾只取消正面半球来的伤害，我们从背后挨的那发不该发奖励
+        attacker.setPos(at.x, at.y, at.z - 2.0);
+        guard.invulnerableTime = 0;
+        dealtTo(guard, attacker, 4.0F);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 1.0,
+                "背后挨打不该算挡下、更不该攒壁障");
+        attacker.setPos(at.x, at.y, at.z + 2.0);
+
+        for (int i = 0; i < 40; i++) {
+            guard.tick();
+        }
+        helper.assertTrue(guard.isBlocking() && CardCombat.ticksBlocking(guard) > 8,
+                "前提：举久了还在挡，但已经出窗");
+        guard.invulnerableTime = 0;
+        dealtTo(guard, attacker, 4.0F);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 1.0,
+                "出窗的那一下只算普通格挡，不该攒层");
+
+        helper.succeed();
+    }
+
     /** 把卡记进玩家的卡账（卡账是真源，宿主由 {@code CardCombat} 在结算时同步）。 */
     private static void grant(GameTestHelper helper, Player player, String cardPath) {
         CardLedger ledger = PlayerCardState.of(player);

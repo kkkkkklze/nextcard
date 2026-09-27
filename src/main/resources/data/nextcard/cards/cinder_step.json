@@ -5,7 +5,32 @@
     "nextcard:fire",
     "nextcard:poison"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "mechanic",
+      "id": "parry",
+      "base_window": 0.4,
+      "ordinary_reduction": 0.2
+    },
+    {
+      "type": "stacks",
+      "id": "wall",
+      "cap": 3,
+      "duration": 8
+    },
+    {
+      "type": "trigger",
+      "on": "parry_success",
+      "actions": [
+        {
+          "stacks": {
+            "id": "wall",
+            "amount": 1
+          }
+        }
+      ]
+    }
+  ],
   "name": "card.nextcard.cinder_step",
   "texture": "cinder_step"
 }
