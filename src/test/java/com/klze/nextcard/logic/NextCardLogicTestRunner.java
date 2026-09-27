@@ -38,6 +38,7 @@ public final class NextCardLogicTestRunner {
             SettlementTest.class,
             PredicateRegistryTest.class,
             CombinatorTest.class,
+            TriggersTest.class,
     };
 
     private NextCardLogicTestRunner() {

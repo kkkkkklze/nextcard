@@ -101,6 +101,30 @@ public final class EffectHost {
     }
 
     /**
+     * 这个持有者当前持有的全部触发子句（带来源卡 id）——{@link Triggers} 唯一的入口。
+     *
+     * <p>每次现读卡表而不是缓存一份：内容热重载换表之后，触发器必须跟着换，
+     * 否则"改了卡面但冷却还在老路上"会有两份真相。读的是 {@link #owned}，
+     * 也就是刚被玩家卡账同步过的那一份。</p>
+     */
+    public List<Triggers.Bound> triggers(String holder) {
+        List<Triggers.Bound> bound = new ArrayList<>();
+        CardIndex index = this.index.get();
+        for (ResourceLocation id : owned.getOrDefault(holder, Set.of())) {
+            CardDefinition card = index.byId().get(id);
+            if (card == null) {
+                continue; // 卡被内容换版删掉了：加载期已报，这里不该炸运行期
+            }
+            for (EffectClause clause : card.effects()) {
+                if (clause instanceof TriggerClause trigger) {
+                    bound.add(new Triggers.Bound(id, trigger));
+                }
+            }
+        }
+        return bound;
+    }
+
+    /**
      * 把所有脏持有者重算一遍，然后统一通知。返回本次处理的持有者数。
      *
      * <p>两阶段是分开的：第一阶段只算（改内部状态、算差量），第二阶段才回调监听者。

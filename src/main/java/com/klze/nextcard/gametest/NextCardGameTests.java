@@ -4,6 +4,7 @@ import com.klze.nextcard.NextCard;
 import com.klze.nextcard.common.combat.CardCombat;
 import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.PlayerCardState;
+import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.player.CardLedger;
 import com.klze.nextcard.common.load.ContentBundle;
 import com.klze.nextcard.common.registry.ModBlocks;
@@ -150,11 +151,50 @@ public class NextCardGameTests {
                 "示例卡必须存在：" + cardPath);
     }
 
+    /**
+     * 「背水一战」的免疫要在世界里成立：致命那一发被打成 0，不致命的那一发不许碰冷却，
+     * 冷却在途时第二次致命要真的打死。
+     *
+     * <p>顺序是有意的：<b>先打一记会疼的</b>。若不先证明"这个受害者真的会掉血"，那么后面
+     * "掉了 0 血"完全可能只是原版无敌帧把整发挡了（{@code invulnerableTime}），免疫根本没跑。
+     * 每记之前把无敌帧清掉，也是为了不给这条假绿留通道。</p>
+     */
+    @GameTest
+    public void lethalImmunityVetoesOnlyTheFatalHit(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player survivor = helper.makeMockSurvivalPlayer();
+        grant(helper, survivor, "last_stand");
+        String holder = survivor.getUUID().toString();
+        double now = survivor.level().getGameTime() / 20.0;
+        Player reaper = helper.makeMockSurvivalPlayer();
+
+        double grazed = dealtTo(survivor, reaper, 5.0F);
+        helper.assertTrue(Math.abs(grazed - 5.0) < 1e-3,
+                "先要证明这一刀真的打得动（否则 0 伤害是假的）：" + grazed);
+        helper.assertTrue(Triggers.inFlight(CardCombat.HOST.counters(), holder, now) == 0.0,
+                "不致命的挨打不该把救命那次扣掉");
+
+        double blocked = dealtTo(survivor, reaper, 30.0F);
+        helper.assertTrue(blocked == 0.0,
+                "致命那一发要被否决，实际掉血 " + blocked + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(CardCombat.lastTrace().toString().contains("免疫"),
+                "守方第①步的归因要指到那张卡：" + CardCombat.lastTrace());
+        helper.assertTrue(Triggers.inFlight(CardCombat.HOST.counters(), holder, now) == 1.0,
+                "用掉一次就该进冷却");
+
+        double second = dealtTo(survivor, reaper, 30.0F);
+        helper.assertTrue(second > 0.0, "冷却在途时第二次致命不该再被免疫：" + second);
+        helper.assertTrue(survivor.isDeadOrDying(), "第二次要真的打死，剩 " + survivor.getHealth());
+
+        helper.succeed();
+    }
+
     /** 一发打在该玩家身上的实际掉血量（攻方是玩家就用玩家攻击，是怪就用怪物攻击）。 */
     private static double dealtTo(Player victim, LivingEntity attacker, float amount) {
         DamageSource source = attacker instanceof Player player
                 ? victim.damageSources().playerAttack(player)
                 : victim.damageSources().mobAttack(attacker);
+        victim.invulnerableTime = 0;  // 无敌帧会把"没掉血"伪装成"被免疫了"
         float before = victim.getHealth();
         victim.hurt(source, amount);
         return before - victim.getHealth();

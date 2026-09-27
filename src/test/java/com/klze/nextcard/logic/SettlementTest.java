@@ -75,7 +75,21 @@ public class SettlementTest {
                 "两边都在场时先乘后减：360×0.75");
 
         assertNull(CardCombat.settle(null, null, 100.0), "谁都没有可生效加成时不该参与结算");
-        assertNull(CardCombat.defenceOptionsFor(defenceWithNoReduction()), "减伤为 0 不是账");
+        assertNull(CardCombat.defenceOptionsFor(defenceWithNoReduction(), null), "减伤为 0 且没否决时不该建账");
+    }
+
+    /**
+     * 执行器给的否决理由要一路走到守方第①步并留在那里——这条接缝就是"免疫"能被回答出
+     * "是谁拦下的"的全部依赖链：{@code Triggers → Predicate 的理由 → DefencePipeline 第①步}。
+     */
+    @Test
+    public void aVetoReasonFromTheExecutorZeroesTheHitAndSaysSo() {
+        Settlement.Result result = CardCombat.settle(null, null,
+                "nextcard:last_stand：这一发致命；免疫这一发", 100.0);
+        assertNotNull(result);
+        assertEquals(0.0, result.value(), 1e-9);
+        assertTrue(result.trace().toString().contains("免疫/否决"), result.trace().toString());
+        assertTrue(result.trace().toString().contains("last_stand"), "归因要指到那张卡: " + result.trace());
     }
 
     private static MechanicProfile defenceWithNoReduction() {

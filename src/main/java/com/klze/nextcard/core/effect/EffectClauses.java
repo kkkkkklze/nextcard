@@ -87,6 +87,10 @@ public final class EffectClauses {
         for (CardDefinition card : cards) {
             for (EffectClause clause : card.effects()) {
                 if (clause instanceof StackClause stack) {
+                    if (Triggers.isReservedStackId(stack.id())) {
+                        errors.add(card.id() + ": stack id " + stack.id() + " uses the engine namespace "
+                                + Triggers.COOLDOWN_PREFIX + " (reserved for cooldowns and open windows)");
+                    }
                     declaredStacks.add(stack.id());
                     StackClause.Scope previous = stackScopes.put(stack.id(), stack.scope());
                     if (previous != null && previous != stack.scope()) {
