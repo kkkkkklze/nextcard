@@ -1,17 +1,25 @@
 package com.klze.nextcard.logic;
 
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.klze.nextcard.core.card.CardIndex;
 import com.klze.nextcard.core.effect.CounterStore;
+import com.klze.nextcard.core.effect.EffectHost;
 import com.klze.nextcard.core.effect.Facts;
+import com.klze.nextcard.core.effect.MechanicProfile;
+import com.klze.nextcard.core.effect.Settlement;
+import com.klze.nextcard.core.effect.StackClause;
 import com.klze.nextcard.core.effect.TriggerClause;
 import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.load.ContentReader;
+import com.klze.nextcard.core.load.LoadResult;
 import net.minecraft.resources.ResourceLocation;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -19,10 +27,11 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * 触发执行器：动作词表里的 {@code lethal_immunity} 第一次真正被消费。
+ * 触发执行器：动作词表里的 {@code lethal_immunity} 与 {@code stacks} 真的被消费了。
  *
  * <p>这里盯的是两类会伪装成"正常"的错：不致命的挨打把冷却白扣掉（真该活下来时没免疫），
- * 以及两张卡共用一份账。所以每条断言都同时看<em>兑现结果</em>和<em>账本余量</em>。</p>
+ * 以及层数变了但快照还停在旧值上（玩家看到"层数在涨、减伤没动"）。所以每条断言都同时看
+ * <em>兑现结果</em>、<em>账本余量</em>和<em>重折之后的通道值</em>。</p>
  */
 public class TriggersTest {
 
@@ -42,6 +51,12 @@ public class TriggersTest {
                 + " \"actions\":[{\"lethal_immunity\":{\"uses\":1,\"cooldown\":20}}]}");
     }
 
+    private static Triggers.Result fire(String event, Facts facts, List<Triggers.Bound> bound,
+                                       CounterStore counters, Map<String, StackClause> declared,
+                                       MechanicProfile profile, double now) {
+        return Triggers.fire(event, HOLDER, facts, bound, counters, declared, profile, now);
+    }
+
     private static Facts fatal(double ownHpRatio) {
         return Facts.builder().attackerHp(ownHpRatio).with("fatal").build();
     }
@@ -52,29 +67,33 @@ public class TriggersTest {
         CounterStore counters = new CounterStore();
         List<Triggers.Bound> bound = List.of(immunity("last_stand"));
 
-        Triggers.Firing first = Triggers.lethalImmunity(HOLDER, fatal(0.7), bound, counters, 0.0);
-        assertNotNull(first);
-        assertTrue(first.reason().contains("免疫这一发"), first.reason());
+        Triggers.Result first = fire(Triggers.DAMAGE_TAKEN, fatal(0.7), bound, counters, Map.of(), null, 0.0);
+        assertNotNull(first.vetoReason());
+        assertTrue(first.vetoReason().contains("免疫"), first.vetoReason());
+        assertEquals(1, first.fired().size());
         assertEquals(1.0, Triggers.inFlight(counters, HOLDER, 0.0), "用掉一次就该有账在途");
 
-        assertNull(Triggers.lethalImmunity(HOLDER, fatal(0.7), bound, counters, 19.9), "冷却在途时不能再免疫");
-        assertNotNull(Triggers.lethalImmunity(HOLDER, fatal(0.7), bound, counters, 20.1), "到点就该恢复");
+        assertNull(fire(Triggers.DAMAGE_TAKEN, fatal(0.7), bound, counters, Map.of(), null, 19.9).vetoReason(),
+                "冷却在途时不能再免疫");
+        assertNotNull(fire(Triggers.DAMAGE_TAKEN, fatal(0.7), bound, counters, Map.of(), null, 20.1).vetoReason(),
+                "到点就该恢复");
     }
 
-    /** 不致命：<b>连账本都不许碰</b>（否则一次普攻就把救命的那次扣掉了）。 */
+    /** 不致命：连账本都不许碰（否则一次普攻就把救命那次扣掉了）。 */
     @Test
     public void aNonFatalHitSpendsNothing() {
         CounterStore counters = new CounterStore();
         List<Triggers.Bound> bound = List.of(immunity("last_stand"));
-        Facts grazed = Facts.builder().attackerHp(0.9).build();
 
-        assertNull(Triggers.lethalImmunity(HOLDER, grazed, bound, counters, 0.0));
+        Triggers.Result grazed = fire(Triggers.DAMAGE_TAKEN, Facts.NONE, bound, counters, Map.of(), null, 0.0);
+        assertNull(grazed.vetoReason());
         assertEquals(0.0, Triggers.inFlight(counters, HOLDER, 0.0));
-        assertNotNull(Triggers.lethalImmunity(HOLDER, fatal(0.9), bound, counters, 0.0),
-                "上一句不能把冷却已经扣掉的路径伪装成'没扣'");
+        assertTrue(grazed.fired().isEmpty(), grazed.fired().toString());
+        assertNotNull(fire(Triggers.DAMAGE_TAKEN, fatal(0.9), bound, counters, Map.of(), null, 0.0).vetoReason(),
+                "上一句不许把「根本没扣」伪装成「扣了也没事」");
     }
 
-    /** 卡面条件（when）没过时同样什么都不消费——包括 {@code uses > 1} 那张。 */
+    /** 卡面条件（when）先于账本：不成立时既不兑现也不消费。 */
     @Test
     public void whenGateRunsBeforeTheLedger() {
         CounterStore counters = new CounterStore();
@@ -82,16 +101,17 @@ public class TriggersTest {
                 + " \"when\":[{\"hp_below\": 0.3}, {\"any_of\": [{\"fatal\": true},"
                 + " {\"target_kind\": \"boss\"}]}],"
                 + " \"actions\":[{\"lethal_immunity\":{\"uses\":2,\"cooldown\":5}}]}");
+        List<Triggers.Bound> bound = List.of(lowHpOnly);
 
-        assertNull(Triggers.lethalImmunity(HOLDER, fatal(0.6), List.of(lowHpOnly), counters, 0.0),
-                "血量 60% 不满足 hp_below 0.3");
+        Triggers.Result rich = fire(Triggers.DAMAGE_TAKEN, fatal(0.6), bound, counters, Map.of(), null, 0.0);
+        assertNull(rich.vetoReason(), "血量 60% 不满足 hp_below 0.3");
         assertEquals(0.0, Triggers.inFlight(counters, HOLDER, 0.0));
 
-        assertNotNull(Triggers.lethalImmunity(HOLDER, fatal(0.2), List.of(lowHpOnly), counters, 0.0),
+        assertNotNull(fire(Triggers.DAMAGE_TAKEN, fatal(0.2), bound, counters, Map.of(), null, 0.0).vetoReason(),
                 "残血 + 致命：or 分支里第一条就成立");
         assertEquals(1.0, Triggers.inFlight(counters, HOLDER, 0.0), "uses=2 时先扣一层");
-        assertNotNull(Triggers.lethalImmunity(HOLDER, fatal(0.2), List.of(lowHpOnly), counters, 1.0));
-        assertNull(Triggers.lethalImmunity(HOLDER, fatal(0.2), List.of(lowHpOnly), counters, 2.0),
+        assertNotNull(fire(Triggers.DAMAGE_TAKEN, fatal(0.2), bound, counters, Map.of(), null, 1.0).vetoReason());
+        assertNull(fire(Triggers.DAMAGE_TAKEN, fatal(0.2), bound, counters, Map.of(), null, 2.0).vetoReason(),
                 "两层都用完了");
     }
 
@@ -101,39 +121,142 @@ public class TriggersTest {
         CounterStore counters = new CounterStore();
         List<Triggers.Bound> bound = List.of(immunity("a_second"), immunity("a_first"));
 
-        Triggers.Firing first = Triggers.lethalImmunity(HOLDER, fatal(0.5), bound, counters, 0.0);
-        assertNotNull(first);
-        assertEquals(new ResourceLocation("nextcard", "a_first"), first.cardId(), "顺序要稳定，不能看哈希遍历");
+        Triggers.Result first = fire(Triggers.DAMAGE_TAKEN, fatal(0.5), bound, counters, Map.of(), null, 0.0);
+        assertTrue(first.vetoReason().contains("a_first"), "顺序要稳定，不能看哈希遍历: " + first.vetoReason());
         assertEquals(1.0, Triggers.inFlight(counters, HOLDER, 0.0));
 
-        Triggers.Firing second = Triggers.lethalImmunity(HOLDER, fatal(0.5), bound, counters, 0.0);
-        assertNotNull(second, "另一张卡的次数不该被前一张带走");
-        assertEquals(new ResourceLocation("nextcard", "a_second"), second.cardId());
+        Triggers.Result second = fire(Triggers.DAMAGE_TAKEN, fatal(0.5), bound, counters, Map.of(), null, 0.0);
+        assertNotNull(second.vetoReason(), "另一张卡的次数不该被前一张带走");
+        assertTrue(second.vetoReason().contains("a_second"), second.vetoReason());
         assertEquals(2.0, Triggers.inFlight(counters, HOLDER, 0.0));
     }
 
-    /** 事件不对就不该理（"免疫"只挂在 damage_taken 上）。 */
+    /** 事件不对就不该理：绑在 hit 上的子句不会被 damage_taken 叫醒（反之亦然）。 */
     @Test
     public void onlyTheEventItIsBoundToCanFireIt() {
         CounterStore counters = new CounterStore();
-        Triggers.Bound onAttack = bound("reckless", "{\"type\":\"trigger\",\"on\":\"attack\","
-                + " \"when\":[{\"fatal\": true}],\"actions\":[{\"lethal_immunity\":{\"uses\":1}}]}");
-        assertNull(Triggers.lethalImmunity(HOLDER, fatal(0.2), List.of(onAttack), counters, 0.0));
-        assertEquals(0.0, Triggers.inFlight(counters, HOLDER, 0.0));
+        Triggers.Bound onHit = bound("reckless", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"stacks\":{\"id\":\"wall\",\"amount\":1}}]}");
+        List<Triggers.Bound> bound = List.of(onHit);
+
+        assertEquals(0, fire(Triggers.DAMAGE_TAKEN, Facts.NONE, bound, counters,
+                Map.of("wall", stack("wall", 3, 0)), null, 0.0).fired().size(), "挨打不算命中");
+        assertEquals(1, fire(Triggers.HIT, Facts.NONE, bound, counters,
+                Map.of("wall", stack("wall", 3, 0)), null, 0.0).fired().size());
+    }
+
+    /** 叠层：按声明的上限夹住，到点掉层，consume 是扣而不是加负数。 */
+    @Test
+    public void stacksFollowTheDeclaredRuleAndExpireOnTheirOwnClock() {
+        CounterStore counters = new CounterStore();
+        Map<String, StackClause> declared = Map.of("wall", stack("wall", 2, 6));
+        List<Triggers.Bound> bound = List.of(bound("wall_card", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"stacks\":{\"id\":\"wall\",\"amount\":1}}]}"));
+        List<Triggers.Bound> consume = List.of(bound("drain", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"stacks\":{\"id\":\"wall\",\"amount\":2,\"consume\":true}}]}"));
+
+        fire(Triggers.HIT, Facts.NONE, bound, counters, declared, null, 0.0);
+        fire(Triggers.HIT, Facts.NONE, bound, counters, declared, null, 1.0);
+        assertEquals(2.0, Triggers.layers(counters, HOLDER, "wall"), "声明上限 2，第三次也该夹在 2");
+        fire(Triggers.HIT, Facts.NONE, bound, counters, declared, null, 2.0);
+        assertEquals(2.0, Triggers.layers(counters, HOLDER, "wall"));
+
+        counters.expire(new CounterStore.Key(HOLDER, "wall"), 7.0);
+        assertEquals(0.0, Triggers.layers(counters, HOLDER, "wall"), "每层各计 6 秒，到点自己掉");
+
+        fire(Triggers.HIT, Facts.NONE, bound, counters, declared, null, 8.0);
+        fire(Triggers.HIT, Facts.NONE, bound, counters, declared, null, 8.0);
+        assertEquals(2.0, Triggers.layers(counters, HOLDER, "wall"));
+        fire(Triggers.HIT, Facts.NONE, consume, counters, declared, null, 9.0);
+        assertEquals(0.0, Triggers.layers(counters, HOLDER, "wall"), "consume 是扣层，不是加负数");
+    }
+
+    /** {@code ignore_cap} 是唯一能把上限摘掉的写法（卡面"层数不再有上限"那类）。 */
+    @Test
+    public void ignoreCapIsTheOnlyWayPastTheDeclaredCeiling() {
+        CounterStore counters = new CounterStore();
+        Map<String, StackClause> declared = Map.of("wall", stack("wall", 1, 0));
+        List<Triggers.Bound> capped = List.of(bound("wall_card", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"stacks\":{\"id\":\"wall\",\"amount\":3}}]}"));
+        List<Triggers.Bound> unbounded = List.of(bound("wall_card", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"stacks\":{\"id\":\"wall\",\"amount\":3,\"ignore_cap\":true}}]}"));
+
+        fire(Triggers.HIT, Facts.NONE, capped, counters, declared, null, 0.0);
+        assertEquals(1.0, Triggers.layers(counters, HOLDER, "wall"), "没写 ignore_cap 就夹在上限上");
+
+        counters.clearHeld(HOLDER);
+        fire(Triggers.HIT, Facts.NONE, unbounded, counters, declared, null, 0.0);
+        assertEquals(3.0, Triggers.layers(counters, HOLDER, "wall"), "写了才允许越过去");
+    }
+
+    /** 还没实现的动作用<em>报出来</em>，不许静默跳过。 */
+    @Test
+    public void actionsWithoutAnExecutorAreReportedNotSwallowed() {
+        CounterStore counters = new CounterStore();
+        List<Triggers.Bound> bound = List.of(bound("shockwave", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"actions\":[{\"damage\":{\"basis\":\"armor\",\"coefficient\":0.5}},"
+                + " {\"stacks\":{\"id\":\"wall\",\"amount\":1}}]}"));
+        Triggers.Result result = fire(Triggers.HIT, Facts.NONE, bound, counters,
+                Map.of("wall", stack("wall", 3, 0)), null, 0.0);
+
+        assertEquals(1, result.unsupported().size(), result.unsupported().toString());
+        assertTrue(result.unsupported().get(0).contains("damage"), result.unsupported().toString());
+        assertEquals(1, result.fired().size(), "同一子句里能做的照做");
+    }
+
+    /**
+     * 一整圈：内容 → 触发 → 层数 → 重新折叠 → 结算。
+     * 这条是"层数变了要标脏"的证据：少了那一脚，玩家看到的就是"层数在涨、减伤没动"。
+     */
+    @Test
+    public void layersGainedInPlayChangeTheNextSettlement() {
+        CardIndex index = indexWith("wall_card.json", "{\"tier\": 3, \"card_class\": \"B\","
+                + " \"tags\": [\"nextcard:attack\"], \"effects\": ["
+                + " {\"type\": \"stacks\", \"id\": \"wall\", \"cap\": 3, \"duration\": 6},"
+                + " {\"type\": \"trigger\", \"on\": \"hit\","
+                + "  \"actions\": [{\"stacks\": {\"id\": \"wall\", \"amount\": 1}}]},"
+                + " {\"type\": \"mechanic_modifier\", \"target\": \"channel.damage_reduction\","
+                + "  \"source\": {\"counter\": \"wall\", \"per_layer\": 0.05}}]}");
+        ResourceLocation cardId = new ResourceLocation("nextcard", "wall_card");
+        EffectHost host = new EffectHost(() -> index);
+        host.syncOwned(HOLDER, Set.of(cardId));
+        host.flush(List.of());
+
+        double reduction = host.profile(HOLDER).channel("damage_reduction");
+        assertEquals(0.0, reduction, 1e-9, "一层都还没有");
+
+        Triggers.Result fired = Triggers.fire(Triggers.HIT, HOLDER, Facts.NONE, host.triggers(HOLDER),
+                host.counters(), host.declaredStacks(), host.profile(HOLDER), 0.0);
+        assertEquals(1, fired.fired().size(), fired.toString());
+        assertEquals(1.0, Triggers.layers(host.counters(), HOLDER, "wall"));
+
+        host.markDirty(HOLDER);
+        host.flush(List.of());
+        assertEquals(0.05, host.profile(HOLDER).channel("damage_reduction"), 1e-9,
+                "每层 5% 减伤要在重折之后进到通道里");
+
+        Settlement.Result hit = Settlement.resolve(Settlement.plain(100),
+                new com.klze.nextcard.core.effect.DefencePipeline.Options(null, List.of(), List.of(),
+                        List.of(new com.klze.nextcard.core.effect.DefencePipeline.Source("壁障",
+                                host.profile(HOLDER).channel("damage_reduction")))));
+        assertEquals(95.0, hit.value(), 1e-9, "这一发才是玩家看到的数");
     }
 
     /** 引擎命名空间是预留的：内容用 {@code trigger.} 开叠层会把冷却与资源记在同一本账上。 */
     @Test
-    public void theEngineNamespaceIsReserved() {
+    public void theEngineNamespaceGateFailsOnTheRealLoadPath() {
         assertTrue(Triggers.isReservedStackId(Triggers.COOLDOWN_PREFIX + "last_stand"));
         assertTrue(!Triggers.isReservedStackId("barrier"));
-        ResourceLocation card = new ResourceLocation("nextcard", "last_stand");
-        CounterStore.Key key = Triggers.cooldown(HOLDER, card,
-                new com.klze.nextcard.core.effect.Action("lethal_immunity",
-                        JsonParser.parseString("{\"uses\":1}").getAsJsonObject()));
-        assertEquals(HOLDER, key.holder(), "持有者必须进键，否则全服务器共用一份冷却");
-        assertTrue(key.resource().startsWith(Triggers.COOLDOWN_PREFIX));
-        assertTrue(key.resource().contains("last_stand"));
+
+        var tags = ContentReader.readTags(Map.of("nextcard:card_tags/attack.json",
+                json("{\"name\": \"tag.nextcard.attack\"}")));
+        assertTrue(tags.ok(), tags.errors().toString());
+        var hijack = ContentReader.readCards(Map.of("nextcard:cards/hijack.json",
+                json("{\"tier\": 3, \"card_class\": \"B\", \"tags\": [\"nextcard:attack\"],"
+                        + " \"effects\": [{\"type\": \"stacks\", \"id\": \"trigger.cd\", \"cap\": 2}]}")),
+                tags.value());
+        assertTrue(!hijack.ok(), "内容占用引擎命名空间必须是加载错误");
+        assertTrue(hijack.errors().toString().contains("engine namespace"), hijack.errors().toString());
     }
 
     /** 致命口径只有一处：血量减这一发 ≤ 0（原版算完护甲之后的数）。 */
@@ -144,25 +267,28 @@ public class TriggersTest {
         assertTrue(!Triggers.isFatal(10.0, 9.9));
     }
 
-    /**
-     * 预留命名空间那条闸门要在<b>真实加载路径</b>上会红，不能只让 {@code isReservedStackId}
-     * 自己说自己对（内容占用引擎前缀会把"壁障"和"免疫冷却"记到同一本账上）。
-     */
-    @Test
-    public void theEngineNamespaceGateFailsOnTheRealLoadPath() {
+    // —— 夹具 ——
+
+    private static StackClause stack(String id, double cap, double duration) {
+        List<String> errors = new ArrayList<>();
+        StackClause clause = (StackClause) StackClause.parse(
+                json("{\"type\":\"stacks\",\"id\":\"" + id + "\",\"cap\":" + cap + ",\"duration\":"
+                        + duration + "}"), errors);
+        assertTrue(errors.isEmpty() && clause != null, errors.toString());
+        return clause;
+    }
+
+    private static CardIndex indexWith(String fileName, String body) {
         var tags = ContentReader.readTags(Map.of("nextcard:card_tags/attack.json",
                 json("{\"name\": \"tag.nextcard.attack\"}")));
         assertTrue(tags.ok(), tags.errors().toString());
-
-        var hijack = ContentReader.readCards(Map.of("nextcard:cards/hijack.json",
-                json("{\"tier\": 3, \"card_class\": \"B\", \"tags\": [\"nextcard:attack\"],"
-                        + " \"effects\": [{\"type\": \"stacks\", \"id\": \"trigger.cd\", \"cap\": 2}]}")),
-                tags.value());
-        assertTrue(!hijack.ok(), "内容占用引擎命名空间必须是加载错误");
-        assertTrue(hijack.errors().toString().contains("engine namespace"), hijack.errors().toString());
+        LoadResult<CardIndex> cards = ContentReader.readCards(
+                Map.of("nextcard:cards/" + fileName, json(body)), tags.value());
+        assertTrue(cards.ok(), cards.errors().toString());
+        return cards.value();
     }
 
-    private static com.google.gson.JsonObject json(String text) {
+    private static JsonObject json(String text) {
         return JsonParser.parseString(text).getAsJsonObject();
     }
 }

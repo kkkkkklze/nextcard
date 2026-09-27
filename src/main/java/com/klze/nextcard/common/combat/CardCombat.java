@@ -19,8 +19,10 @@ import net.minecraftforge.event.entity.living.LivingDamageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import javax.annotation.Nullable;
 
@@ -50,6 +52,7 @@ public final class CardCombat {
 
     private static int pipelineRuns;
     private static List<String> lastTrace = List.of();
+    private static final Set<String> REPORTED_UNSUPPORTED = new LinkedHashSet<>();
 
     private CardCombat() {
     }
@@ -67,6 +70,7 @@ public final class CardCombat {
     public static void resetForTests() {
         pipelineRuns = 0;
         lastTrace = List.of();
+        REPORTED_UNSUPPORTED.clear();
     }
 
     @SubscribeEvent
@@ -76,28 +80,52 @@ public final class CardCombat {
         State attacker = stateOf(source);
         State defender = stateOf(victim);
         double incoming = event.getAmount();
+        Triggers.Result onTaken = fire(defender, DamageContact.defendView(victim, source, incoming),
+                Triggers.DAMAGE_TAKEN);
         Settlement.Result result = settle(attacker == null ? null : attacker.profile(),
                 DamageContact.attackView(source, victim),
-                defender == null ? null : defender.profile(),
-                vetoFor(defender, DamageContact.defendView(victim, source, incoming)),
-                incoming);
-        if (result == null) {
-            return;
+                defender == null ? null : defender.profile(), onTaken.vetoReason(), incoming);
+        if (result != null) {
+            event.setAmount((float) result.value());
+            pipelineRuns++;
+            lastTrace = result.trace();
         }
-        event.setAmount((float) result.value());
-        pipelineRuns++;
-        lastTrace = result.trace();
+        // 攻方的"命中时"在结算之后才兑现：这一发的数已经定了，攒下的层给下一发用
+        fire(attacker, DamageContact.attackView(source, victim), Triggers.HIT);
+    }
+
+    /**
+     * 这个持有者的触发器在某个事件上兑现一次。没有玩家状态（不是玩家、或一张卡都没有）时什么都不做。
+     *
+     * <p>两件事在这里兜住：① 兑现动过层数就把宿主标脏——每层映射折进快照的值是层数的函数，
+     * 不重算会停在旧层数上（玩家看到的"层数在涨、减伤没动"就是这么来的）；
+     * ② 引擎还没有执行器的动作要<em>报出来</em>，每个只报一次，不许静默跳过。</p>
+     */
+    public static Triggers.Result fire(@Nullable State state, @Nullable Facts facts, String event) {
+        if (state == null || state.triggers().isEmpty() || facts == null) {
+            return Triggers.Result.NOTHING;
+        }
+        Triggers.Result result = Triggers.fire(event, state.holder(), facts, state.triggers(),
+                HOST.counters(), HOST.declaredStacks(), state.profile(), state.nowSeconds());
+        for (String unsupported : result.unsupported()) {
+            if (REPORTED_UNSUPPORTED.add(unsupported)) {
+                NextCard.LOGGER.warn("[nextcard] {}", unsupported);
+            }
+        }
+        if (!result.fired().isEmpty()) {
+            HOST.markDirty(state.holder());
+        }
+        return result;
     }
 
     /**
      * 一个玩家的生效状态。卡账同步只做一次，机制快照与触发子句都从这次同步里来——
-     * 分两次同步就会出现"快照是新的、触发器还是旧卡表那批"。
+     * 分两次同步就会出现"快照是新的、触发子句还是旧卡表那批"。
      *
-     * @param health 此刻血量（免疫判定要按"扣完这一发还剩多少"判致命）
      * @param nowSeconds 世界时刻（秒），与 {@code CounterStore} 同一口径
      */
     public record State(String holder, @Nullable MechanicProfile profile, List<Triggers.Bound> triggers,
-                        double health, double nowSeconds) {
+                        double nowSeconds) {
     }
 
     /** 谁的卡账折出来的生效状态；没有玩家身份、没卡时给 null。 */
@@ -115,22 +143,7 @@ public final class CardCombat {
         HOST.flush(List.of());
         MechanicProfile profile = HOST.profile(holder);
         return new State(holder, profile.slotIds().isEmpty() ? null : profile, HOST.triggers(holder),
-                player.getHealth(), player.level().getGameTime() / 20.0);
-    }
-
-    /**
-     * 免疫否决：要不要把这一发打成 0 由 {@link Triggers} 判，理由原样交进守方管线第①步。
-     *
-     * <p>"致命"这件事不在这里再判一遍——{@link Facts} 里的 {@code fatal} 开关是唯一口径
-     * （由 {@link DamageContact} 折），两处各判一次迟早会对不上。</p>
-     */
-    public static @Nullable String vetoFor(@Nullable State defender, Facts contact) {
-        if (defender == null || defender.triggers().isEmpty()) {
-            return null;
-        }
-        Triggers.Firing firing = Triggers.lethalImmunity(defender.holder(), contact, defender.triggers(),
-                HOST.counters(), defender.nowSeconds());
-        return firing == null ? null : firing.cardId() + "：" + firing.reason();
+                player.level().getGameTime() / 20.0);
     }
 
     /**

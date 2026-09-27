@@ -143,6 +143,43 @@ public class NextCardGameTests {
         helper.succeed();
     }
 
+    /**
+     * 攻方的"命中时"在世界里兑现：打中一下攒一层「扎根」，下一发挨打时那层的减伤真的生效。
+     *
+     * <p>这条盯的是两个只在世界里才会暴露的错：① 层数变了但快照停在旧值（玩家看到
+     * "层数在涨、减伤没动"）；② 兑现时机排在结算之前，把这一发的数也一起改了。</p>
+     */
+    @GameTest
+    public void hitsBuildStacksThatFeedTheNextHit(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "iron_root");
+        Player dummy = helper.makeMockSurvivalPlayer();
+        String holder = striker.getUUID().toString();
+
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "root") == 0.0,
+                "开局该一层都没有");
+        dealtTo(dummy, striker, 5.0F);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "root") == 1.0,
+                "打中一下要攒一层（hit 这条事件在真实命中里跑到了）");
+
+        double second = dealtTo(striker, dummy, 10.0F);
+        helper.assertTrue(Math.abs(second - 9.0) < 1e-3,
+                "一层的 10% 减伤要落在下一发上，实际 " + second + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "root") == 1.0,
+                "它挨的这一下不该也算命中：" + Triggers.layers(CardCombat.HOST.counters(), holder, "root"));
+
+        dealtTo(dummy, striker, 5.0F);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "root") == 2.0,
+                "第二次命中继续涨层");
+        dealtTo(dummy, striker, 1.0F);
+        dealtTo(dummy, striker, 1.0F);   // 只够攒层、不至于把靶子打死（死了的实体不会再触发兑现）
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "root") == 3.0,
+                "声明的上限是 3 层，涨到那就停：" + Triggers.layers(CardCombat.HOST.counters(), holder, "root"));
+
+        helper.succeed();
+    }
+
     /** 把卡记进玩家的卡账（卡账是真源，宿主由 {@code CardCombat} 在结算时同步）。 */
     private static void grant(GameTestHelper helper, Player player, String cardPath) {
         CardLedger ledger = PlayerCardState.of(player);

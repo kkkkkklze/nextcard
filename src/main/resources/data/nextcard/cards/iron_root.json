@@ -4,7 +4,34 @@
   "tags": [
     "nextcard:poison"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "stacks",
+      "id": "root",
+      "cap": 3,
+      "duration": 6
+    },
+    {
+      "type": "trigger",
+      "on": "hit",
+      "actions": [
+        {
+          "stacks": {
+            "id": "root",
+            "amount": 1
+          }
+        }
+      ]
+    },
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.damage_reduction",
+      "source": {
+        "counter": "root",
+        "per_layer": 0.1
+      }
+    }
+  ],
   "name": "card.nextcard.iron_root",
   "texture": "iron_root"
 }

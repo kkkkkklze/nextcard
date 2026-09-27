@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 /**
  * 生效宿主：拥有卡集 → 重算 → 差量 → 才通知（v1.0 §4.1-6 的执行形状）。
@@ -157,6 +158,41 @@ public final class EffectHost {
     /** 单持有者便捷入口（调试命令与测试用）。 */
     public int flush(Listener listener) {
         return flush(List.of(listener));
+    }
+
+    /**
+     * 标记某个持有者需要重算。<b>层数变了必须调它</b>：每层映射（{@code per_stack}）折进快照的
+     * 值是层数的函数，只标"卡集变了"会让快照停在旧层数上——玩家看到的就是"层数在涨，减伤没动"。
+     */
+    public void markDirty(String holder) {
+        dirty.add(holder);
+    }
+
+    /**
+     * 当前卡表里<b>所有</b>叠层声明（id → 声明）。执行器据此知道上限与时长该是多少。
+     *
+     * <p>为什么按整张卡表算、不按持有者算：同一个 id 在卡表里就是<em>同一种资源</em>（"壁障"不会
+     * 因为两张卡都提到它就变成两本账），而多张卡各自复述这套资源正是卡表的正常写法。合并规则与
+     * 槽位 {@code stack.<id>.cap} / {@code .duration} 的 {@code MAX} 合成同出一条，不另定一套。
+     * 只读 {@code cap} / {@code duration}：谁该<em>产出</em>这条资源由触发子句自己说。</p>
+     */
+    public Map<String, StackClause> declaredStacks() {
+        Map<String, StackClause> declared = new TreeMap<>();
+        for (CardDefinition card : index.get().byId().values()) {
+            for (EffectClause clause : card.effects()) {
+                if (clause instanceof StackClause stack) {
+                    declared.merge(stack.id(), stack, EffectHost::loosest);
+                }
+            }
+        }
+        return declared;
+    }
+
+    private static StackClause loosest(StackClause left, StackClause right) {
+        double cap = Math.max(left.cap(), right.cap());
+        double duration = Math.max(left.duration(), right.duration());
+        return new StackClause(left.id(), left.scope(), cap, duration, left.gain(), left.perStack(),
+                left.onMax());
     }
 
     private MechanicProfile foldModifiers(String holder, Set<ResourceLocation> ids) {
