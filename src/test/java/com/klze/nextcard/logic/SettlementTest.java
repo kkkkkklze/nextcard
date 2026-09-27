@@ -3,6 +3,7 @@ package com.klze.nextcard.logic;
 import com.klze.nextcard.common.combat.CardCombat;
 import com.klze.nextcard.core.effect.AttackPipeline;
 import com.klze.nextcard.core.effect.DefencePipeline;
+import com.klze.nextcard.core.effect.Facts;
 import com.klze.nextcard.core.effect.MechanicProfile;
 import com.klze.nextcard.core.effect.ModifierClause;
 import com.klze.nextcard.core.effect.Settlement;
@@ -63,19 +64,45 @@ public class SettlementTest {
                 new ModifierClause("channel.all_damage", 1.0, "", 0.0, List.of()),
                 new ModifierClause("channel.melee_damage", 0.5, "", 0.0, List.of()),
                 new ModifierClause("channel.direction_bonus", 0.2, "", 0.0, List.of())), id -> 0);
-        Settlement.Result result = CardCombat.settle(attack, null, 100.0);
+        Settlement.Result result = CardCombat.settle(attack, null, null, 100.0);
         assertNotNull(result);
         assertEquals(360.0, result.value(), 1e-9, "100 ×(1+1) 全伤 ×(1+0.5) 近战 ×(1+0.2) 方向");
 
         MechanicProfile defence = MechanicProfile.fold(List.of(
                 new ModifierClause("channel.damage_reduction", 0.25, "", 0.0, List.of())), id -> 0);
-        assertEquals(75.0, CardCombat.settle(null, defence, 100.0).value(), 1e-9,
+        assertEquals(75.0, CardCombat.settle(null, defence, null, 100.0).value(), 1e-9,
                 "守方减伤走的是同一条链的减免段，不是另开一次乘法");
-        assertEquals(270.0, CardCombat.settle(attack, defence, 100.0).value(), 1e-9,
+        assertEquals(270.0, CardCombat.settle(attack, defence, null, 100.0).value(), 1e-9,
                 "两边都在场时先乘后减：360×0.75");
 
-        assertNull(CardCombat.settle(null, null, 100.0), "谁都没有可生效加成时不该参与结算");
+        assertNull(CardCombat.settle(null, null, null, 100.0), "谁都没有可生效加成时不该参与结算");
         assertNull(CardCombat.defenceOptionsFor(defenceWithNoReduction(), null), "减伤为 0 且没否决时不该建账");
+    }
+
+    /**
+     * 方向增伤是<em>条件</em>乘区：卡面写了那个值，接触不成立时也不能白给
+     * （《00》背刺＝"从目标背后 120° 打出的攻击"）。
+     */
+    @Test
+    public void directionBonusIsGatedByTheActualContact() {
+        MechanicProfile stab = MechanicProfile.fold(List.of(
+                new ModifierClause("channel.direction_bonus", 0.3, "", 0.0, List.of())), id -> 0);
+        Facts behind = Facts.builder().angleOffFront(175.0).build();
+        Facts inFront = Facts.builder().angleOffFront(10.0).build();
+
+        assertEquals(130.0, CardCombat.settle(stab, behind, null, null, 100.0).value(), 1e-9, "背后 5° 吃到 +30%");
+        Settlement.Result front = CardCombat.settle(stab, inFront, null, null, 100.0);
+        assertEquals(100.0, front.value(), 1e-9, "正面一分不吃");
+        assertTrue(front.trace().toString().contains("未生效"),
+                "没吃到也要留痕，否则看起来就像卡面没写: " + front.trace());
+        // 传 null 是"调用方没有接触信息可给"（纯数值推演），不是世界里那一发：世界路径里
+        // 出手的不是活体时压根没有攻方快照，这一格自然是 0，见 DamageContact.attackView
+        assertEquals(130.0, CardCombat.settle(stab, null, null, null, 100.0).value(), 1e-9,
+                "没有接触事实时按卡面写的算，不额外吞掉加成");
+        assertEquals(130.0, CardCombat.settle(stab, Facts.builder().angleOffFront(120.1).build(),
+                null, null, 100.0).value(), 1e-9, "离正面 120.1° = 离背面中线 59.9°，还在背后 60° 半角内");
+        assertEquals(100.0, CardCombat.settle(stab, Facts.builder().angleOffFront(119.9).build(),
+                null, null, 100.0).value(), 1e-9, "差 0.2° 就出扇区");
     }
 
     /**

@@ -189,6 +189,49 @@ public class NextCardGameTests {
         helper.succeed();
     }
 
+    /**
+     * 接触事实在世界里成立：同一张「双牙」（背后 +30%），正面一刀不吃、背后一刀要吃。
+     *
+     * <p>这条是"方向增伤"第一次有世界内证据：之前那个乘区谁都没喂过值，喂了也只能证明
+     * "卡面数字能折进快照"，证不了"引擎知道我从哪一刀砍的"。这里朝向与站位都由手摆，
+     * 所以绿红只可能来自角度换算本身（{@link DamageContact#angleOffFront}）。</p>
+     */
+    @GameTest
+    public void directionBonusNeedsTheActualContact(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "twin_fang");
+        net.minecraft.world.phys.Vec3 anchor = helper.absoluteVec(new net.minecraft.world.phys.Vec3(0.5, 1.0, 0.5));
+
+        place(striker, anchor.add(0.0, 0.0, 2.0));
+        double fromFront = dealtTo(facing(helper, anchor, 0.0F), striker, 10.0F);
+        place(striker, anchor.add(0.0, 0.0, -2.0));
+        double fromBehind = dealtTo(facing(helper, anchor, 0.0F), striker, 10.0F);
+
+        helper.assertTrue(Math.abs(fromFront - 10.0) < 1e-3,
+                "正面那一刀不该吃方向加成，实际 " + fromFront + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(Math.abs(fromBehind - 13.0) < 1e-3,
+                "背后那一刀要吃 +30%，实际 " + fromBehind + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(CardCombat.lastTrace().toString().contains("方向增伤 0.3")
+                        && !CardCombat.lastTrace().toString().contains("未生效"),
+                "背后那次的留痕要写明这一格真的进了乘区: " + CardCombat.lastTrace());
+
+        helper.succeed();
+    }
+
+    /** 摆一个朝指定朝向的受害者（yaw 0 = 朝 +Z，所以 +Z 那边站的人就是正面）。 */
+    private static Player facing(GameTestHelper helper, net.minecraft.world.phys.Vec3 at, float yaw) {
+        Player victim = helper.makeMockSurvivalPlayer();
+        victim.setPos(at.x, at.y, at.z);
+        victim.setYRot(yaw);
+        victim.yHeadRot = yaw;
+        return victim;
+    }
+
+    private static void place(Player attacker, net.minecraft.world.phys.Vec3 at) {
+        attacker.setPos(at.x, at.y, at.z);
+    }
+
     /** 一发打在该玩家身上的实际掉血量（攻方是玩家就用玩家攻击，是怪就用怪物攻击）。 */
     private static double dealtTo(Player victim, LivingEntity attacker, float amount) {
         DamageSource source = attacker instanceof Player player

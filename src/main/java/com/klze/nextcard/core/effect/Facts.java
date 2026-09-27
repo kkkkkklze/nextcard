@@ -67,6 +67,11 @@ public record Facts(double attackerHpRatio, double targetHpRatio, double angleOf
         return Math.abs(180.0 - angleOffFront) % 360.0;
     }
 
+    /** 这一发是否在目标背后 {@code halfAngle}° 的扇区里（《00》背后 120° = 半角 60°）。 */
+    public boolean fromBehind(double halfAngle) {
+        return angleOffBack() <= halfAngle;
+    }
+
     public static Builder builder() {
         return new Builder();
     }

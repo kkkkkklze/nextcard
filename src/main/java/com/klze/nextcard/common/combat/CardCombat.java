@@ -8,10 +8,13 @@ import com.klze.nextcard.core.effect.DefencePipeline;
 import com.klze.nextcard.core.effect.EffectHost;
 import com.klze.nextcard.core.effect.Facts;
 import com.klze.nextcard.core.effect.MechanicProfile;
+import com.klze.nextcard.core.effect.Predicates;
 import com.klze.nextcard.core.effect.Settlement;
 import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.player.CardLedger;
+import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
+import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.event.entity.living.LivingDamageEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
@@ -68,15 +71,16 @@ public final class CardCombat {
 
     @SubscribeEvent
     public static void onLivingDamage(LivingDamageEvent event) {
-        net.minecraft.world.entity.Entity source = event.getSource().getEntity();
+        Entity source = event.getSource().getEntity();
+        LivingEntity victim = event.getEntity();
         State attacker = stateOf(source);
-        State defender = stateOf(event.getEntity());
+        State defender = stateOf(victim);
         double incoming = event.getAmount();
-        double otherHp = source instanceof LivingEntity living
-                ? living.getHealth() / Math.max(1.0e-6, living.getMaxHealth())
-                : 1.0;
         Settlement.Result result = settle(attacker == null ? null : attacker.profile(),
-                defender == null ? null : defender.profile(), vetoFor(defender, otherHp, incoming), incoming);
+                DamageContact.attackView(source, victim),
+                defender == null ? null : defender.profile(),
+                vetoFor(defender, DamageContact.defendView(victim, source, incoming)),
+                incoming);
         if (result == null) {
             return;
         }
@@ -98,8 +102,8 @@ public final class CardCombat {
 
     /** 谁的卡账折出来的生效状态；没有玩家身份、没卡时给 null。 */
     @Nullable
-    public static State stateOf(@Nullable net.minecraft.world.entity.Entity entity) {
-        if (!(entity instanceof net.minecraft.world.entity.player.Player player)) {
+    public static State stateOf(@Nullable Entity entity) {
+        if (!(entity instanceof Player player)) {
             return null;
         }
         CardLedger ledger = PlayerCardState.of(player);
@@ -115,54 +119,31 @@ public final class CardCombat {
     }
 
     /**
-     * 免疫否决：<b>只有这一发确实致命时才成立</b>。判错方向的代价不对称——把普攻当成致命会白扣一次
-     * 20 秒冷却，玩家真正该活下来的那一下就没免疫了。
+     * 免疫否决：要不要把这一发打成 0 由 {@link Triggers} 判，理由原样交进守方管线第①步。
      *
-     * @param otherHpRatio 打我那位当前的血量比例。打我的不是活体（箭、火、摔落）时调用方按 1.0 传，
-     *                     因为现没有任何守方卡面条件读它——用假值之前先要说明它是假的
+     * <p>"致命"这件事不在这里再判一遍——{@link Facts} 里的 {@code fatal} 开关是唯一口径
+     * （由 {@link DamageContact} 折），两处各判一次迟早会对不上。</p>
      */
-    public static @Nullable String vetoFor(@Nullable State defender, double otherHpRatio, double incoming) {
+    public static @Nullable String vetoFor(@Nullable State defender, Facts contact) {
         if (defender == null || defender.triggers().isEmpty()) {
             return null;
         }
-        if (!Triggers.isFatal(defender.health(), incoming)) {
-            return null;
-        }
-        Facts facts = defenderFacts(defender.health(), otherHpRatio, incoming);
-        Triggers.Firing firing = Triggers.lethalImmunity(defender.holder(), facts, defender.triggers(),
+        Triggers.Firing firing = Triggers.lethalImmunity(defender.holder(), contact, defender.triggers(),
                 HOST.counters(), defender.nowSeconds());
         return firing == null ? null : firing.cardId() + "：" + firing.reason();
     }
 
     /**
-     * 守方视角的事实。{@link Facts} 的两个血量字段是<b>这张卡的主人</b>与<b>对面那一位</b>，
-     * 所以守方这份快照里 {@code attackerHp} 装的是"我"的血量——命名欠一笔，等接触事实
-     * （入射角/索敌状态）真进来时一起改，不在只有两个字段的时候先改一遍。
-     */
-    public static Facts defenderFacts(double ownHealth, double otherHpRatio, double incoming) {
-        Facts.Builder builder = Facts.builder()
-                .attackerHp(ownHealth / 20.0)
-                .targetHp(otherHpRatio);
-        if (Triggers.isFatal(ownHealth, incoming)) {
-            builder.with("fatal");
-        }
-        return builder.build();
-    }
-
-    /**
      * 跑完整链；两边都没有可生效的账时返回 null（不参与、不改数）。
      * 纯函数，可无头测试——绑定 {@code ServerPlayer} 会让它没法被证明。
+     *
+     * @param contact 攻方视角的接触事实（决定方向增伤这格吃不吃得到）；null = 不看接触
      */
     @Nullable
-    public static Settlement.Result settle(@Nullable MechanicProfile attack, @Nullable MechanicProfile defence,
+    public static Settlement.Result settle(@Nullable MechanicProfile attack, @Nullable Facts contact,
+                                           @Nullable MechanicProfile defence, @Nullable String vetoReason,
                                            double incoming) {
-        return settle(attack, defence, null, incoming);
-    }
-
-    @Nullable
-    public static Settlement.Result settle(@Nullable MechanicProfile attack, @Nullable MechanicProfile defence,
-                                           @Nullable String vetoReason, double incoming) {
-        AttackPipeline.Input input = attackInputFor(attack, incoming);
+        AttackPipeline.Input input = attackInputFor(attack, incoming, contact);
         DefencePipeline.Options options = defenceOptionsFor(defence, vetoReason);
         if (input == null && options == null) {
             return null;
@@ -170,18 +151,33 @@ public final class CardCombat {
         return Settlement.resolve(input == null ? Settlement.plain(incoming) : input, options);
     }
 
-    /** 攻方的乘区输入；没有攻方快照时给 null（表示这一发不由卡来加成）。 */
+    /** 不看接触事实的那条入口（纯数值推演与既有断言）。 */
     @Nullable
-    public static AttackPipeline.Input attackInputFor(@Nullable MechanicProfile attack, double incoming) {
+    public static Settlement.Result settle(@Nullable MechanicProfile attack, @Nullable MechanicProfile defence,
+                                           @Nullable String vetoReason, double incoming) {
+        return settle(attack, null, defence, vetoReason, incoming);
+    }
+
+    /**
+     * 攻方的乘区输入；没有攻方快照时给 null（表示这一发不由卡来加成）。
+     *
+     * <p>方向增伤是<em>条件乘区</em>：卡面写的那个值只有在"从目标背后 120° 内"这一发才进乘区
+     * （《00》背刺的定义），接触不成立时留痕会写"未生效"，好让人看出是"没吃到"而不是"没写"。</p>
+     */
+    @Nullable
+    public static AttackPipeline.Input attackInputFor(@Nullable MechanicProfile attack, double incoming,
+                                                      @Nullable Facts contact) {
         if (attack == null) {
             return null;
         }
         double allDamage = attack.channel("all_damage");
         double melee = attack.channel("melee_damage");
         double direction = attack.channel("direction_bonus");
+        boolean directionApplies = contact == null
+                || contact.fromBehind(Predicates.BACK_SECTOR_HALF_ANGLE);
         return new AttackPipeline.Input(incoming, 1.0, melee > 0 ? "melee" : null,
                 Map.of("melee", melee), allDamage, 0.0, 0.0, 1.0, direction, false, 0.0, 0.0,
-                AttackPipeline.penetration());
+                AttackPipeline.penetration(), directionApplies);
     }
 
     /**

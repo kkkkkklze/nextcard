@@ -90,16 +90,30 @@ public final class AttackPipeline {
      * @param extraSettlements 追加结算（乘区之外）
      * @param penetration      这次攻击声明的穿透（《00》：横扫"无视目标的格挡与护盾"、
      *                         处决"不结算护甲与减伤"）。没有卡面通道写它之前，调用方传空集。
+     * @param directionApplicable 这一发的<em>接触</em>是否满足方向条件（背后 120° 之类由调用方
+     *                         从 {@link Facts} 判好交进来）。不成立时卡面给的方向增伤值<em>不进乘区</em>，
+     *                         但留痕会写"未生效"，好让人一眼看出是"没吃到"而不是"没写"。
      */
     public record Input(double base, double coefficient, @Nullable String attackClass,
                         Map<String, Double> classBonuses, double allDamage, double ownBuff,
                         double specialDamage, double critMultiplier, double directionBonus,
                         boolean capExempted, double flatThisSource, double extraSettlements,
-                        Set<Penetration> penetration) {
+                        Set<Penetration> penetration, boolean directionApplicable) {
 
         public Input {
             classBonuses = new TreeMap<>(classBonuses);
             penetration = penetration == null ? Set.of() : Set.copyOf(penetration);
+        }
+
+        /** 不关心方向条件的调用点（纯数值推演、蒙特卡洛）：按"方向已成立"算。 */
+        public Input(double base, double coefficient, @Nullable String attackClass,
+                     Map<String, Double> classBonuses, double allDamage, double ownBuff,
+                     double specialDamage, double critMultiplier, double directionBonus,
+                     boolean capExempted, double flatThisSource, double extraSettlements,
+                     Set<Penetration> penetration) {
+            this(base, coefficient, attackClass, classBonuses, allDamage, ownBuff, specialDamage,
+                    critMultiplier, directionBonus, capExempted, flatThisSource, extraSettlements,
+                    penetration, true);
         }
 
         /** 六选一：只有这一格能用，其余分类的加成对本次攻击不产生影响。 */
@@ -199,7 +213,11 @@ public final class AttackPipeline {
 
         double direction = input.directionBonus();
         String directionNote = "× (1+方向增伤 " + direction + ")";
-        if (!input.capExempted() && direction > DIRECTION_BONUS_CAP) {
+        if (!input.directionApplicable()) {
+            // 值本来是卡面给的，接触不成立就不进这一格——但要留痕说清是"没吃到"而不是"没写"
+            directionNote = "方向增伤 " + direction + " 未生效（这一发的接触不满足方向条件）";
+            direction = 0.0;
+        } else if (!input.capExempted() && direction > DIRECTION_BONUS_CAP) {
             directionNote += " 被封顶到 " + DIRECTION_BONUS_CAP + "（卡面未声明超限）";
             direction = DIRECTION_BONUS_CAP;
         }
