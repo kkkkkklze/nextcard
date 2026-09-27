@@ -32,7 +32,7 @@ import java.util.function.ToIntFunction;
  */
 public record ModifierClause(String target, double value, String text, boolean uncapped,
                              String sourceCounter, double perLayer,
-                             List<Condition> when) implements EffectClause {
+                             List<Predicate> when) implements EffectClause {
 
     private static final Set<String> KEYS = Set.of("type", "target", "value", "uncapped", "source", "when");
     private static final Set<String> SOURCE_KEYS = Set.of("counter", "per_layer");
@@ -43,7 +43,7 @@ public record ModifierClause(String target, double value, String text, boolean u
 
     /** 不解除上限的数值改写（测试与内容解析两条路都走它）。 */
     public ModifierClause(String target, double value, String sourceCounter, double perLayer,
-                          List<Condition> when) {
+                          List<Predicate> when) {
         this(target, value, "", false, sourceCounter, perLayer, when);
     }
 
@@ -118,7 +118,7 @@ public record ModifierClause(String target, double value, String text, boolean u
             counter = sourceBody.get("counter").getAsString();
             perLayer = sourceBody.get("per_layer").getAsDouble();
         }
-        List<Condition> conditions = new ArrayList<>();
+        List<Predicate> conditions = new ArrayList<>();
         if (!StackClause.parseConditions(body, "when", conditions, errors)) {
             return null;
         }

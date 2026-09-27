@@ -40,7 +40,7 @@ public record StackClause(String id, Scope scope, double cap, double duration,
     }
 
     /** 一次产出。 */
-    public record Gain(String event, double amount, List<Condition> when) {
+    public record Gain(String event, double amount, List<Predicate> when) {
         public Gain {
             when = List.copyOf(when);
         }
@@ -103,7 +103,7 @@ public record StackClause(String id, Scope scope, double cap, double duration,
                     continue;
                 }
                 double amount = entry.has("amount") ? entry.get("amount").getAsDouble() : 1.0;
-                List<Condition> when = new ArrayList<>();
+                List<Predicate> when = new ArrayList<>();
                 if (!parseConditions(entry, "when", when, errors)) {
                     continue;
                 }
@@ -135,7 +135,12 @@ public record StackClause(String id, Scope scope, double cap, double duration,
         return new StackClause(id, scope, cap, duration, gains, perStack, onMax);
     }
 
-    static boolean parseConditions(JsonObject owner, String field, List<Condition> out, List<String> errors) {
+    /**
+     * 解析一个 {@code when} 数组（缺席 = 成立）。元素可以是叶子条件，也可以是组合子，
+     * 所以类型是 {@link Predicate} 树而不是 {@link Condition} 列表——"满足任意一条即可"
+     * 这类卡面写法从这一行起才有地方落。
+     */
+    static boolean parseConditions(JsonObject owner, String field, List<Predicate> out, List<String> errors) {
         if (!owner.has(field)) {
             return true;
         }
@@ -144,16 +149,11 @@ public record StackClause(String id, Scope scope, double cap, double duration,
             errors.add(field + " must be an array");
             return false;
         }
-        for (JsonElement entry : element.getAsJsonArray()) {
-            if (!entry.isJsonObject()) {
-                errors.add(field + " entries must be objects");
-                return false;
-            }
-            Condition condition = Condition.parse(entry.getAsJsonObject(), errors);
-            if (condition != null) {
-                out.add(condition);
-            }
+        List<Predicate> parsed = Predicates.parseArray(element, field, errors, 0);
+        if (parsed == null) {
+            return false;
         }
+        out.addAll(parsed);
         return true;
     }
 }

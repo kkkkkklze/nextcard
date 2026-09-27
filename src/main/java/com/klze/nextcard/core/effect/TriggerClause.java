@@ -32,7 +32,7 @@ import java.util.Set;
  */
 public record TriggerClause(String on, double atSeconds, boolean inherits,
                             double windowSeconds, int uses, double everySeconds,
-                            List<Condition> when, List<Action> actions) implements EffectClause {
+                            List<Predicate> when, List<Action> actions) implements EffectClause {
 
     /** {@code uses} 的缺省：窗口内不限次数。 */
     public static final int UNLIMITED_USES = -1;
@@ -105,7 +105,7 @@ public record TriggerClause(String on, double atSeconds, boolean inherits,
                 }
             }
         }
-        List<Condition> conditions = new ArrayList<>();
+        List<Predicate> conditions = new ArrayList<>();
         if (!StackClause.parseConditions(body, "when", conditions, errors)) {
             return null;
         }

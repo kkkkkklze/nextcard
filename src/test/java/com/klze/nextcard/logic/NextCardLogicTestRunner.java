@@ -36,6 +36,8 @@ public final class NextCardLogicTestRunner {
             AttackPipelineTest.class,
             DefencePipelineTest.class,
             SettlementTest.class,
+            PredicateRegistryTest.class,
+            CombinatorTest.class,
     };
 
     private NextCardLogicTestRunner() {

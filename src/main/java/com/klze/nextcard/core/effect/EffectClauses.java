@@ -112,16 +112,18 @@ public final class EffectClauses {
                         checkAction(card, action, declaredStacks, errors);
                     }
                     for (StackClause.Gain gain : stack.gain()) {
-                        for (Condition condition : gain.when()) {
-                            checkCondition(card, condition, declaredStacks, errors);
+                        for (Predicate condition : gain.when()) {
+                            Predicates.validateTree(condition, declaredStacks,
+                                    card.id() + " gain " + stack.id(), errors);
                         }
                     }
                 } else if (clause instanceof TriggerClause trigger) {
                     for (Action action : trigger.actions()) {
                         checkAction(card, action, declaredStacks, errors);
                     }
-                    for (Condition condition : trigger.when()) {
-                        checkCondition(card, condition, declaredStacks, errors);
+                    for (Predicate condition : trigger.when()) {
+                        Predicates.validateTree(condition, declaredStacks,
+                                card.id() + " trigger " + trigger.on(), errors);
                     }
                 }
             }
@@ -179,13 +181,6 @@ public final class EffectClauses {
         String stackId = action.referencedStackId();
         if (!stackId.isEmpty() && !stacks.contains(stackId)) {
             errors.add(card.id() + ": action references undeclared stack " + stackId);
-        }
-    }
-
-    private static void checkCondition(CardDefinition card, Condition condition, Set<String> stacks,
-                                       List<String> errors) {
-        if (condition.isStacks() && !stacks.contains(condition.stackId())) {
-            errors.add(card.id() + ": condition references undeclared stack " + condition.stackId());
         }
     }
 }
