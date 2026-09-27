@@ -1,6 +1,7 @@
 package com.klze.nextcard.gametest;
 
 import com.klze.nextcard.NextCard;
+import com.klze.nextcard.common.combat.CardCombat;
 import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.PlayerCardState;
 import com.klze.nextcard.core.player.CardLedger;
@@ -12,9 +13,10 @@ import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.server.packs.resources.ResourceManager;
-import net.minecraft.world.entity.player.Player;
 import net.minecraftforge.gametest.GameTestHolder;
 import net.minecraftforge.gametest.PrefixGameTestTemplate;
 
@@ -96,5 +98,65 @@ public class NextCardGameTests {
         helper.assertTrue(reloaded.drawCount() == 1, "抽卡次数也不能累加：" + reloaded.drawCount());
 
         helper.succeed();
+    }
+
+    /**
+     * 卡的加成与减免真的改变世界里的一刀——不是只在纯逻辑里成立。
+     *
+     * <p>前面的门证明"能加载、能算"，这条证明"接在链路上"：{@code LivingDamageEvent} 是原版算完
+     * 护甲之后、扣血之前的最后一道关口，只有真服务端能验。</p>
+     *
+     * <p>受害者一律用玩家而不是怪：怪会随难度随机穿上护甲（实测同一发 10 点只掉 9.84），
+     * 那笔账是原版的，不是我们的；玩家空手空甲，进管线的数就是发过去的数。
+     * 三条断言缺一不可：没卡时不许动数、攻方 +50% 打在最终值上、守方 −40% 落在同一发上。</p>
+     */
+    @GameTest
+    public void cardsChangeDamageInALiveHit(GameTestHelper helper) {
+        CardCombat.resetForTests();
+
+        double untreated = dealtTo(helper.makeMockSurvivalPlayer(), helper.makeMockSurvivalPlayer(), 10.0F);
+        helper.assertTrue(Math.abs(untreated - 10.0) < 1e-3, "谁都没有卡时原样落地，实际 " + untreated);
+        helper.assertTrue(CardCombat.pipelineRuns() == 0,
+                "没有可生效的账时，接管点一次都不该改数：" + CardCombat.pipelineRuns());
+
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "ember_lash");
+        double boosted = dealtTo(helper.makeMockSurvivalPlayer(), striker, 10.0F);
+        helper.assertTrue(Math.abs(boosted - 15.0) < 1e-3,
+                "全伤 +50% 要打在最终值上，实际 " + boosted + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(CardCombat.pipelineRuns() == 1,
+                "改过一次数就该记一次：" + CardCombat.pipelineRuns());
+        helper.assertTrue(CardCombat.lastTrace().toString().contains("全伤"),
+                "留痕要跟着进世界，否则线上问「为什么多打这点」没处指：" + CardCombat.lastTrace());
+
+        Player guard = helper.makeMockSurvivalPlayer();
+        grant(helper, guard, "ash_guard");
+        // 攻方这里也得是玩家：原版在简单难度下会把怪的普攻削成 min(d/2+1, d)（实测 10 → 6），
+        // 那笔账发生在我们的事件之前，用玩家攻方才能让三段站在同一发 10 点上比。
+        double taken = dealtTo(guard, helper.makeMockSurvivalPlayer(), 10.0F);
+        helper.assertTrue(Math.abs(taken - 6.0) < 1e-3,
+                "守方 −40% 减伤要落在同一发上，实际 " + taken + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(CardCombat.pipelineRuns() == 2,
+                "两边各改一次：" + CardCombat.pipelineRuns());
+
+        helper.succeed();
+    }
+
+    /** 把卡记进玩家的卡账（卡账是真源，宿主由 {@code CardCombat} 在结算时同步）。 */
+    private static void grant(GameTestHelper helper, Player player, String cardPath) {
+        CardLedger ledger = PlayerCardState.of(player);
+        helper.assertTrue(ledger != null, "card capability 必须挂在玩家身上");
+        helper.assertTrue(ledger.grant(new ResourceLocation(NextCard.MODID, cardPath)),
+                "示例卡必须存在：" + cardPath);
+    }
+
+    /** 一发打在该玩家身上的实际掉血量（攻方是玩家就用玩家攻击，是怪就用怪物攻击）。 */
+    private static double dealtTo(Player victim, LivingEntity attacker, float amount) {
+        DamageSource source = attacker instanceof Player player
+                ? victim.damageSources().playerAttack(player)
+                : victim.damageSources().mobAttack(attacker);
+        float before = victim.getHealth();
+        victim.hurt(source, amount);
+        return before - victim.getHealth();
     }
 }

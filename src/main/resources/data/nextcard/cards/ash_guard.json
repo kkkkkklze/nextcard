@@ -4,7 +4,13 @@
   "tags": [
     "nextcard:fire"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.damage_reduction",
+      "value": 0.4
+    }
+  ],
   "name": "card.nextcard.ash_guard",
   "texture": "ash_guard"
 }

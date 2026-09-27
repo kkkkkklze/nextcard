@@ -5,7 +5,13 @@
     "nextcard:fire",
     "nextcard:attack"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.all_damage",
+      "value": 0.5
+    }
+  ],
   "name": "card.nextcard.ember_lash",
   "texture": "ember_lash"
 }
