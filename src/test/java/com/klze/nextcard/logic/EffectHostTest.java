@@ -33,7 +33,7 @@ public class EffectHostTest {
 
     @Test
     public void severalGrantsCollapseIntoOneFlush() {
-        EffectHost host = new EffectHost(index(
+        EffectHost host = new EffectHost(() -> index(
                 card(WEAK, "window.length", 0.30),
                 card(SHARP, "charge.rate", 0.20)));
         AtomicInteger notifications = new AtomicInteger();
@@ -58,7 +58,7 @@ public class EffectHostTest {
     /** 监听者读到的必须是算完之后的状态，而不是"这张卡刚加、那张还没算"。 */
     @Test
     public void listenersAlwaysSeeTheFinishedProfile() {
-        EffectHost host = new EffectHost(index(
+        EffectHost host = new EffectHost(() -> index(
                 card(WEAK, "window.length", 0.30),
                 card(SHARP, "window.length", 0.50)));
         List<Double> seen = new ArrayList<>();
@@ -74,7 +74,7 @@ public class EffectHostTest {
     /** 撤卡不写反向代码：重算一次，值自己回到基准，差量里带 CARD_LOST。 */
     @Test
     public void revokingRecomputesInsteadOfUndoing() {
-        EffectHost host = new EffectHost(index(card(WEAK, "window.length", 0.30), card(SHARP, "window.length", 0.50)));
+        EffectHost host = new EffectHost(() -> index(card(WEAK, "window.length", 0.30), card(SHARP, "window.length", 0.50)));
         host.grant("p1", WEAK);
         host.grant("p1", SHARP);
         List<Reconciler.Change> reported = new ArrayList<>();

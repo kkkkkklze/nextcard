@@ -1,6 +1,9 @@
 package com.klze.nextcard.logic;
 
+import com.klze.nextcard.common.combat.CardCombat;
 import com.klze.nextcard.core.effect.DamagePipeline;
+import com.klze.nextcard.core.effect.MechanicProfile;
+import com.klze.nextcard.core.effect.ModifierClause;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -91,5 +94,31 @@ public class DamagePipelineTest {
                 "没参与的乘区也要留痕为 ×(1+0)，好让人看出它确实被算过: " + result.trace());
         assertFalse(result.trace().stream().anyMatch(line -> line.contains("追加结算")),
                 "值为 0 的尾部加法不该出现在留痕里: " + result.trace());
+    }
+
+    /**
+     * 通道名 → 乘区的映射（战斗接管里唯一会静默改变数值解释的一步）。
+     * 这几条通道由内容侧词表证实存在；暴击与破甲刻意未接，见 {@code CardCombat} 的注释。
+     */
+    @Test
+    public void channelsMapOntoTheZonesTheyBelongTo() {
+        MechanicProfile attack = MechanicProfile.fold(List.of(
+                new ModifierClause("channel.all_damage", 1.0, "", 0.0, List.of()),
+                new ModifierClause("channel.melee_damage", 0.5, "", 0.0, List.of()),
+                new ModifierClause("channel.direction_bonus", 0.2, "", 0.0, List.of())), id -> 0);
+        DamagePipeline.Input input = CardCombat.inputFor(attack, null, 100.0);
+        assertEquals(360.0, DamagePipeline.resolve(input).value(), 1e-9,
+                "100 ×(1+1) 全伤 ×(1+0.5) 近战 ×(1+0.2) 方向");
+
+        assertTrue(CardCombat.inputFor(null, null, 100.0) == null, "谁都没有可生效加成时不该参与结算");
+    }
+
+    /** 守方减伤走的是同一条管线的减伤段，不是另开一次乘法。 */
+    @Test
+    public void defenderReductionGoesThroughTheSameZone() {
+        MechanicProfile defence = MechanicProfile.fold(List.of(
+                new ModifierClause("channel.damage_reduction", 0.25, "", 0.0, List.of())), id -> 0);
+        DamagePipeline.Input input = CardCombat.inputFor(null, defence, 100.0);
+        assertEquals(75.0, DamagePipeline.resolve(input).value(), 1e-9);
     }
 }

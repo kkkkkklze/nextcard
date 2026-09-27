@@ -32,13 +32,13 @@ public final class EffectHost {
                      List<Reconciler.SlotChange> slots);
     }
 
-    private final CardIndex index;
+    private final java.util.function.Supplier<CardIndex> index;
     private final CounterStore counters = new CounterStore();
     private final Map<String, EffectSnapshot> applied = new HashMap<>();
     private final Map<String, MechanicProfile> folded = new HashMap<>();
     private final Set<String> dirty = new LinkedHashSet<>();
 
-    public EffectHost(CardIndex index) {
+    public EffectHost(java.util.function.Supplier<CardIndex> index) {
         this.index = index;
     }
 
@@ -48,7 +48,7 @@ public final class EffectHost {
 
     /** 授予一张卡：只标脏，不立刻生效。 */
     public void grant(String holder, ResourceLocation cardId) {
-        if (!index.byId().containsKey(cardId)) {
+        if (!index.get().byId().containsKey(cardId)) {
             throw new IllegalArgumentException("unknown card: " + cardId);
         }
         owned(holder).add(cardId);
@@ -62,6 +62,27 @@ public final class EffectHost {
             dirty.add(holder);
         }
         return removed;
+    }
+
+    /**
+     * 用外部真源（玩家卡账）覆盖这里的持有集，只在确实不同时标脏。
+     *
+     * <p>存在的理由：卡账才是持有关系的家，宿主只负责"算生效状态"。没有这个入口，两边各持一份
+     * 持有集就会分叉——那是"两份真相"最常见的一种形状。</p>
+     */
+    public void syncOwned(String holder, Set<ResourceLocation> ids) {
+        Set<ResourceLocation> current = owned(holder);
+        if (current.equals(ids)) {
+            return;
+        }
+        current.clear();
+        for (ResourceLocation id : ids) {
+            if (!index.get().byId().containsKey(id)) {
+                throw new IllegalArgumentException("unknown card: " + id);
+            }
+            current.add(id);
+        }
+        dirty.add(holder);
     }
 
     public Set<ResourceLocation> owned(String holder) {
@@ -94,7 +115,7 @@ public final class EffectHost {
             dirty.remove(holder);
             Set<ResourceLocation> ids = Set.copyOf(owned(holder));
             EffectSnapshot before = applied.getOrDefault(holder, new EffectSnapshot(Set.of(), Set.of()));
-            EffectSnapshot after = EffectSnapshot.compute(index, ids);
+            EffectSnapshot after = EffectSnapshot.compute(index.get(), ids);
             MechanicProfile afterProfile = foldModifiers(holder, ids);
             pending.add(new Pending(holder, after, afterProfile,
                     Reconciler.diff(before, after), Reconciler.slotDiff(profile(holder), afterProfile)));
@@ -117,7 +138,7 @@ public final class EffectHost {
     private MechanicProfile foldModifiers(String holder, Set<ResourceLocation> ids) {
         List<ModifierClause> modifiers = new ArrayList<>();
         for (ResourceLocation id : ids) {
-            CardDefinition card = index.byId().get(id);
+            CardDefinition card = index.get().byId().get(id);
             if (card == null) {
                 continue;
             }
