@@ -33,6 +33,7 @@ public final class NextCardLogicTestRunner {
             EffectHostTest.class,
             ContentCatalogTest.class,
             CardLedgerTest.class,
+            DamagePipelineTest.class,
     };
 
     private NextCardLogicTestRunner() {
