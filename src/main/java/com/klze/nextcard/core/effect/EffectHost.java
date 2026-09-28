@@ -236,6 +236,14 @@ public final class EffectHost {
             for (EffectClause clause : card.effects()) {
                 if (clause instanceof ModifierClause modifier) {
                     modifiers.add(modifier);
+                } else if (clause instanceof StackClause stack) {
+                    // per_stack 是同一条"每层多少"的第二种写法：折进同一张表，与
+                    // mechanic_modifier + source:{counter, per_layer} 得到同一个数。
+                    // 只在这里读它的话，卡面写了 per_stack 会静默不生效——那是最难查的一种假绿。
+                    for (ModifierClause perStack : stack.perStack()) {
+                        modifiers.add(new ModifierClause(perStack.target(), 0.0, "", false, stack.id(),
+                                perStack.value(), perStack.when()));
+                    }
                 }
             }
         }

@@ -110,6 +110,11 @@ public final class EffectClauses {
                     checkExclusive(card, modifier, exclusiveValues, exclusiveOwner, errors);
                 } else if (clause instanceof StackClause stack) {
                     for (ModifierClause perStack : stack.perStack()) {
+                        if (perStack.isPerLayer() || perStack.uncapped()) {
+                            // per_stack 的层数就是本条资源自己，再写 source/uncapped 会指向第二种解释
+                            errors.add(card.id() + ": stacks " + stack.id() + " per_stack entry must be a"
+                                    + " plain {target, value} (its layer count is this stack itself)");
+                        }
                         checkModifier(card, perStack, declaredStacks, declaredMechanics, errors);
                     }
                     for (Action action : stack.onMax()) {

@@ -99,6 +99,69 @@ public class EffectHostTest {
         assertEquals(0.30, slots.get(slots.size() - 1).to(), 1e-9);
     }
 
+    /**
+     * {@code per_stack} 是同一条"每层多少"的第二种写法，必须与
+     * {@code mechanic_modifier + source:{counter, per_layer}} 折出同一个数——
+     * 只读后者的话，卡面写了 {@code per_stack} 会静默不生效（最难查的一种假绿）。
+     */
+    @Test
+    public void perStackAndLayeredModifierFoldToTheSameNumber() {
+        EffectHost host = new EffectHost(() -> index(
+                stackCard(WEAK, "wall", 0.05),
+                layeredCard(SHARP, "wall", 0.05)));
+        host.grant("p1", WEAK);
+        host.grant("p2", SHARP);
+        host.flush((holder, snapshot, cards, slots) -> {
+        });
+
+        assertEquals(0.0, host.profile("p1").channel("damage_reduction"), 1e-9, "零层就不该有减免");
+        host.counters().gain(new com.klze.nextcard.core.effect.CounterStore.Key("p1", "wall"), 2,
+                new com.klze.nextcard.core.effect.CounterStore.Rule(3, 0.0,
+                        com.klze.nextcard.core.effect.CounterStore.Expiry.PER_LAYER), 0.0);
+        host.counters().gain(new com.klze.nextcard.core.effect.CounterStore.Key("p2", "wall"), 2,
+                new com.klze.nextcard.core.effect.CounterStore.Rule(3, 0.0,
+                        com.klze.nextcard.core.effect.CounterStore.Expiry.PER_LAYER), 0.0);
+        host.markDirty("p1");
+        host.markDirty("p2");
+        host.flush((holder, snapshot, cards, slots) -> {
+        });
+
+        assertEquals(0.10, host.profile("p1").channel("damage_reduction"), 1e-9,
+                "per_stack 写下的每层 5% 要真的进到折叠结果里");
+        assertEquals(host.profile("p1").channel("damage_reduction"),
+                host.profile("p2").channel("damage_reduction"), 1e-9, "两种写法必须给同一个数");
+    }
+
+    /** per_stack 的层数就是这条资源自己，再写 source 会指向第二种解释——加载期就拦。 */
+    @Test
+    public void perStackMustBeAPlainValue() {
+        EffectClause bad = new com.klze.nextcard.core.effect.StackClause("wall",
+                com.klze.nextcard.core.effect.StackClause.Scope.PERSISTENT, 3, 0.0, List.of(),
+                List.of(new ModifierClause("channel.damage_reduction", 0.0, "", false, "other", 0.05,
+                        List.of())),
+                List.of());
+        CardDefinition card = new CardDefinition(WEAK, 1, CardClass.B, Set.of(Scenario.TAG_ATTACK),
+                Optional.empty(), List.of(), List.of(bad));
+        List<String> errors = com.klze.nextcard.core.effect.EffectClauses.validateReferences(List.of(card));
+        assertTrue(errors.stream().anyMatch(e -> e.contains("plain {target, value}")), errors.toString());
+    }
+
+    private static CardDefinition stackCard(ResourceLocation id, String stackId, double perLayer) {
+        EffectClause stack = new com.klze.nextcard.core.effect.StackClause(stackId,
+                com.klze.nextcard.core.effect.StackClause.Scope.PERSISTENT, 3, 0.0, List.of(),
+                List.of(new ModifierClause("channel.damage_reduction", perLayer, "", 0.0, List.of())),
+                List.of());
+        return new CardDefinition(id, 1, CardClass.B, Set.of(Scenario.TAG_ATTACK),
+                Optional.empty(), List.of(), List.of(stack));
+    }
+
+    private static CardDefinition layeredCard(ResourceLocation id, String stackId, double perLayer) {
+        EffectClause modifier = new ModifierClause("channel.damage_reduction", 0.0, "", false, stackId,
+                perLayer, List.of());
+        return new CardDefinition(id, 1, CardClass.B, Set.of(Scenario.TAG_ATTACK),
+                Optional.empty(), List.of(), List.of(modifier));
+    }
+
     private static CardDefinition card(ResourceLocation id, String slot, double value) {
         EffectClause modifier = new ModifierClause(slot, value, "", 0.0, List.of());
         return new CardDefinition(id, 1, CardClass.B, Set.of(Scenario.TAG_ATTACK),
