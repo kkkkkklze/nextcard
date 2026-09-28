@@ -24,6 +24,17 @@
       ]
     },
     {
+      "type": "trigger",
+      "on": "damage_taken",
+      "actions": [
+        {
+          "force_parry": {
+            "seconds": 3
+          }
+        }
+      ]
+    },
+    {
       "type": "mechanic_modifier",
       "target": "channel.damage_reduction",
       "source": {

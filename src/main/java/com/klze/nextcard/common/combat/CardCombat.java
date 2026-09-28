@@ -2,6 +2,7 @@ package com.klze.nextcard.common.combat;
 
 import com.klze.nextcard.NextCard;
 import com.klze.nextcard.common.load.CardContentReload;
+import com.klze.nextcard.common.player.CardAttributes;
 import com.klze.nextcard.common.player.PlayerCardState;
 import com.klze.nextcard.core.effect.AttackPipeline;
 import com.klze.nextcard.core.effect.DefencePipeline;
@@ -99,13 +100,13 @@ public final class CardCombat {
             pipelineRuns++;
             lastTrace = result.trace();
         }
-        perform(defender, victim, onTaken);
+        perform(defender, victim, source, onTaken);
 
         // 攻方的"命中时"排在结算之后：这一发的数已经定了，攒下的层与补出去的伤害给下一发用。
         // 我们自己补的那一发不再叫醒攻方触发器——否则 damage → hit → damage 一路递归到栈溢出。
         if (!CardDamageSource.isEngineExtra(damageSource)) {
             Triggers.Result onHit = fire(attacker, attackView, Triggers.HIT, basesOf(attacker, incoming));
-            perform(attacker, victim, onHit);
+            perform(attacker, victim, source, onHit);
         }
     }
 
@@ -141,12 +142,14 @@ public final class CardCombat {
         MechanicProfile profile = defender.profile() == null ? new MechanicProfile(Map.of())
                 : defender.profile();
         double window = ParryTiming.windowSeconds(parry.param("base_window", 0.0), profile);
-        String which = ParryTiming.precise(ticksBlocking(owner), window)
+        boolean forced = Triggers.forcedPrecise(defender.holder(), defender.triggers(), HOST.counters(),
+                defender.nowSeconds());
+        String which = forced || ParryTiming.precise(ticksBlocking(owner), window)
                 ? Triggers.PARRY_SUCCESS : Triggers.BLOCK_SUCCESS;
         Triggers.Result result = fire(defender,
                 DamageContact.defendView(owner, damageSource.getEntity(), incoming), which,
                 basesOf(defender, incoming));
-        perform(defender, owner, result);
+        perform(defender, owner, damageSource.getEntity(), result);
     }
 
     /** 这次举盾已经举了多少 tick（原版的算法：总时长 − 剩余时长）。 */
@@ -162,12 +165,21 @@ public final class CardCombat {
      * 独立伤害走 {@link CardDamageSource}，所以它会正常再过一遍目标的护甲与减免——
      * 它是新的一发，不是把刚才那个数再乘一遍。</p>
      */
-    private static void perform(@Nullable State actor, LivingEntity directTarget, Triggers.Result result) {
+    private static void perform(@Nullable State actor, @Nullable LivingEntity directTarget,
+                                @Nullable Entity attacker, Triggers.Result result) {
         if (actor == null || result.extraHits().isEmpty() && result.knockbacks().isEmpty()) {
             return;
         }
         Player owner = actor.player();
         for (Triggers.ExtraHit hit : result.extraHits()) {
+            if (hit.target() == Triggers.Target.ATTACKER) {
+                // 反弹只还给打我的那位：找不到活体攻击者（箭、火、摔落）就是没对象，不搜半径
+                if (attacker instanceof LivingEntity striker && striker != owner) {
+                    striker.hurt(new CardDamageSource(hit.cardId(), owner, hit.attribution()),
+                            (float) hit.amount());
+                }
+                continue;
+            }
             for (LivingEntity target : around(owner, directTarget, hit.radius())) {
                 target.hurt(new CardDamageSource(hit.cardId(), owner, hit.attribution()), (float) hit.amount());
             }
@@ -228,6 +240,20 @@ public final class CardCombat {
     }
 
     /**
+     * 上线 / 重生时把附带数值挂回去：我们的属性修饰是 <em>transient</em> 的（不进存档），
+     * 所以每次换实体都要重投影一次，否则"进了游戏护甲是 0、砍一刀才跳上来"。
+     */
+    @SubscribeEvent
+    public static void onPlayerLoggedIn(net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent event) {
+        stateOf(event.getEntity());
+    }
+
+    @SubscribeEvent
+    public static void onPlayerRespawn(net.minecraftforge.event.entity.player.PlayerEvent.PlayerRespawnEvent event) {
+        stateOf(event.getEntity());
+    }
+
+    /**
      * 一个玩家的生效状态。卡账同步只做一次，机制快照与触发子句都从这次同步里来——
      * 分两次同步就会出现"快照是新的、触发子句还是旧卡表那批"。
      *
@@ -251,8 +277,12 @@ public final class CardCombat {
         HOST.syncOwned(holder, ledger.owned());
         HOST.flush(List.of());
         MechanicProfile profile = HOST.profile(holder);
-        return new State(holder, profile.slotIds().isEmpty() ? null : profile, HOST.triggers(holder),
-                player, player.level().getGameTime() / 20.0);
+        MechanicProfile folded = profile.slotIds().isEmpty() ? null : profile;
+        // 附带数值（护甲 / 生命上限 / 移速 / 攻速）要真的挂上身：折好却不挂，卡面那一列就是空话。
+        // 传 null 也照样调用——那正是"把我们的修饰摘干净"的那一路。
+        CardAttributes.apply(player, folded);
+        return new State(holder, folded, HOST.triggers(holder), player,
+                player.level().getGameTime() / 20.0);
     }
 
     /**

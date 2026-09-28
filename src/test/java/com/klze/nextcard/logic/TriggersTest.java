@@ -248,6 +248,49 @@ public class TriggersTest {
         assertEquals(95.0, hit.value(), 1e-9, "这一发才是玩家看到的数");
     }
 
+    /** 反弹：基数默认是"这一发的量"，目标固定是打我的那位（不搜半径）。 */
+    @Test
+    public void reflectGoesBackAtTheAttackerOnly() {
+        CounterStore counters = new CounterStore();
+        List<Triggers.Bound> bound = List.of(bound("echo_shell", "{\"type\":\"trigger\","
+                + " \"on\":\"damage_taken\",\"actions\":[{\"reflect\":{\"ratio\":0.5}}]}"));
+        Triggers.Result result = fire(Triggers.DAMAGE_TAKEN, Facts.NONE, bound, counters, Map.of(), null,
+                new Triggers.Bases(0.0, 0.0, 12.0), 0.0);
+
+        assertEquals(1, result.extraHits().size(), result.extraHits().toString());
+        assertEquals(6.0, result.extraHits().get(0).amount(), 1e-9, "12 × 0.5");
+        assertEquals(Triggers.Target.ATTACKER, result.extraHits().get(0).target());
+        assertEquals(0.0, result.extraHits().get(0).radius(), 1e-9, "反弹不该顺手搜一圈");
+
+        List<Triggers.Bound> zero = List.of(bound("echo_shell", "{\"type\":\"trigger\","
+                + " \"on\":\"damage_taken\",\"actions\":[{\"reflect\":{\"ratio\":0.0}}]}"));
+        Triggers.Result bounced = fire(Triggers.DAMAGE_TAKEN, Facts.NONE, zero, counters, Map.of(), null,
+                new Triggers.Bases(0.0, 0.0, 12.0), 0.0);
+        assertTrue(bounced.extraHits().isEmpty() && !bounced.unsupported().isEmpty(),
+                "0 比例要说出来，不能静默不发: " + bounced.unsupported());
+    }
+
+    /** 强制精准：一枚在途计数、按时长过期；到点之后又要靠真窗口。 */
+    @Test
+    public void forceParryHoldsForItsSecondsThenLetsGo() {
+        CounterStore counters = new CounterStore();
+        List<Triggers.Bound> granter = List.of(bound("iron_root", "{\"type\":\"trigger\","
+                + " \"on\":\"damage_taken\",\"actions\":[{\"force_parry\":{\"seconds\":3}}]}"));
+
+        assertTrue(!Triggers.forcedPrecise(HOLDER, granter, counters, 0.0), "还没挨打就没有窗口");
+        fire(Triggers.DAMAGE_TAKEN, Facts.NONE, granter, counters, Map.of(), null, 0.0);
+        assertTrue(Triggers.forcedPrecise(HOLDER, granter, counters, 2.9), "2.9 秒还在窗口里");
+        assertTrue(!Triggers.forcedPrecise(HOLDER, granter, counters, 3.1), "过点就该撒手");
+
+        // 同一张卡反复触发只有一枚在途（cap 1），时长刷新成最后一次的那一下
+        List<Triggers.Bound> two = List.of(bound("other", "{\"type\":\"trigger\","
+                + " \"on\":\"damage_taken\",\"actions\":[{\"force_parry\":{\"seconds\":9}}]}"));
+        fire(Triggers.DAMAGE_TAKEN, Facts.NONE, two, counters, Map.of(), null, 4.0);
+        assertTrue(Triggers.forcedPrecise(HOLDER, two, counters, 12.5), "第二张卡自己那 9 秒");
+        assertEquals(1.0, Triggers.inFlight(counters, HOLDER, 12.5),
+                "强制精准的在途与冷却同在引擎命名空间里，但各是一张资源（0.1 那张已过期）");
+    }
+
     /** 引擎命名空间是预留的：内容用 {@code trigger.} 开叠层会把冷却与资源记在同一本账上。 */
     @Test
     public void theEngineNamespaceGateFailsOnTheRealLoadPath() {

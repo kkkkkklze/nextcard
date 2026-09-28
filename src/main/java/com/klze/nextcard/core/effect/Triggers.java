@@ -52,6 +52,20 @@ public final class Triggers {
     /** 动作：把目标推开。 */
     public static final String KNOCKBACK = "knockback";
 
+    /** 动作：把这发的部分反弹给打我的那位。 */
+    public static final String REFLECT = "reflect";
+
+    /** 动作：接下来 N 秒内的格挡一律按精准结算。 */
+    public static final String FORCE_PARRY = "force_parry";
+
+    /** 独立伤害打给谁。 */
+    public enum Target {
+        /** 以持卡人为圆心、按半径找活物（冲击波）。 */
+        AROUND_OWNER,
+        /** 就打我的那一位（反弹）。 */
+        ATTACKER
+    }
+
     /** 引擎自有资源的命名空间（冷却、在途窗口都归它）。 */
     public static final String COOLDOWN_PREFIX = "trigger.";
 
@@ -91,7 +105,8 @@ public final class Triggers {
      * 所以同一个乘区对同一个数字不会生效两遍。谁去保证不递归：接管点认 {@code CardDamageSource}，
      * 自己发出去的命中不再叫醒攻方触发器。</p>
      */
-    public record ExtraHit(ResourceLocation cardId, double amount, double radius, String attribution) {
+    public record ExtraHit(ResourceLocation cardId, double amount, double radius, Target target,
+                           String attribution) {
     }
 
     /** 要把目标推开多少（半径 0 = 只推直接目标）。 */
@@ -193,8 +208,20 @@ public final class Triggers {
                         }
                     }
                     case KNOCKBACK -> {
-                        String reason = planKnockback(entry, action, bases, knockbacks);
+                        String reason = planKnockback(entry, action, knockbacks);
                         fired.add(new Firing(entry.cardId(), action, reason));
+                    }
+                    case REFLECT -> {
+                        String reason = planReflect(entry, action, bases, unsupported, extraHits);
+                        if (reason != null) {
+                            fired.add(new Firing(entry.cardId(), action, reason));
+                        }
+                    }
+                    case FORCE_PARRY -> {
+                        String reason = spendForceParry(holder, entry, action, counters, nowSeconds);
+                        if (reason != null) {
+                            fired.add(new Firing(entry.cardId(), action, reason));
+                        }
                     }
                     default -> unsupported.add(entry.cardId() + " 的 " + action.type()
                             + "（词表里有，引擎还没有执行器）");
@@ -220,11 +247,74 @@ public final class Triggers {
             return null;
         }
         out.add(new ExtraHit(entry.cardId(), amount, Math.max(0.0, action.number("radius", 0.0)),
-                "以" + basisText(basis) + "为基数 ×" + coefficient));
+                Target.AROUND_OWNER, "以" + basisText(basis) + "为基数 ×" + coefficient));
         return "补一次 " + rounded(amount) + " 点独立伤害（" + basisText(basis) + " × " + coefficient + "）";
     }
 
-    private static String planKnockback(Bound entry, Action action, Bases bases, List<KnockbackHit> out) {
+    /**
+     * 反弹：把这一发的一个比例<em>还给打我的那位</em>。
+     *
+     * <p>基数默认是 {@code incoming}（"反弹该次伤害的 50%"说的就是这一发进管线时的量，
+     * 也就是原版算完护甲、我们还没改之前的那个数）。它不搜半径——反弹的对象天然就是攻击者。</p>
+     */
+    private static @Nullable String planReflect(Bound entry, Action action, Bases bases,
+                                               List<String> unsupported, List<ExtraHit> out) {
+        double ratio = action.number("ratio", 0.0);
+        String basis = action.body().has("basis") ? action.body().get("basis").getAsString() : "incoming";
+        double amount = bases.of(basis) * ratio;
+        if (!(amount > 0)) {
+            unsupported.add(entry.cardId() + " 的 reflect：基数 " + basis + " × " + ratio + " = 0");
+            return null;
+        }
+        out.add(new ExtraHit(entry.cardId(), amount, 0.0, Target.ATTACKER,
+                "反弹 " + basisText(basis) + " ×" + ratio));
+        return "反弹 " + rounded(amount) + " 点给攻击者（" + basisText(basis) + " × " + ratio + "）";
+    }
+
+    /**
+     * "接下来 N 秒内的格挡一律按精准结算"：记一枚引擎自有的在途计数，时长就是那 N 秒。
+     *
+     * <p>用 {@link CounterStore} 而不是再造一个计时器，和冷却同一条机制；读它的是
+     * {@link #forcedPrecise}。</p>
+     */
+    private static @Nullable String spendForceParry(String holder, Bound entry, Action action,
+                                                   CounterStore counters, double nowSeconds) {
+        double seconds = Math.max(0.0, action.number("seconds", 0.0));
+        CounterStore.Key key = new CounterStore.Key(holder, forceParryResource(entry.cardId()));
+        counters.gain(key, 1, new CounterStore.Rule(1, seconds, CounterStore.Expiry.REFRESH_ALL), nowSeconds);
+        return "接下来 " + seconds + " 秒内的格挡一律按精准结算";
+    }
+
+    /** 某张卡的"强制精准"资源名（引擎命名空间内，内容由 `trigger.` 前缀被拦住进不来）。 */
+    public static String forceParryResource(ResourceLocation cardId) {
+        return COOLDOWN_PREFIX + cardId + "." + FORCE_PARRY;
+    }
+
+    /**
+     * 有没有哪张卡正在强制精准。
+     *
+     * <p>答案是"精准"这件事会<em>照发 {@code parry_success}</em>——"一律按精准结算"要的就是
+     * 让这 N 秒里所有"弹反成功后"的收益都吃得到；只改判定名字而不发事件，这条动作等于没做。
+     * （《挂点覆盖表》把这条列为待确认，代码先按唯一自洽的读法实现。）</p>
+     */
+    public static boolean forcedPrecise(String holder, List<Bound> bound, CounterStore counters,
+                                        double nowSeconds) {
+        for (Bound entry : bound) {
+            for (Action action : entry.clause().actions()) {
+                if (!FORCE_PARRY.equals(action.type())) {
+                    continue;
+                }
+                CounterStore.Key key = new CounterStore.Key(holder, forceParryResource(entry.cardId()));
+                counters.expire(key, nowSeconds);
+                if (counters.amount(key) > 0) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static String planKnockback(Bound entry, Action action, List<KnockbackHit> out) {
         double strength = action.number("strength", 0.0);
         double radius = Math.max(0.0, action.number("radius", 0.0));
         out.add(new KnockbackHit(entry.cardId(), strength, radius, "击退 " + strength));

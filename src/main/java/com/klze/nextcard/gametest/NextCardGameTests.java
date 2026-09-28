@@ -3,7 +3,9 @@ package com.klze.nextcard.gametest;
 import com.klze.nextcard.NextCard;
 import com.klze.nextcard.common.combat.CardCombat;
 import com.klze.nextcard.common.load.CardContentReload;
+import com.klze.nextcard.common.player.CardAttributes;
 import com.klze.nextcard.common.player.PlayerCardState;
+import com.klze.nextcard.core.effect.ParryTiming;
 import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.player.CardLedger;
 import com.klze.nextcard.common.load.ContentBundle;
@@ -261,13 +263,19 @@ public class NextCardGameTests {
         dealtTo(guard, attacker, 4.0F);
         helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 1.0,
                 "窗口内挡下要算精准格挡并攒一层壁障");
+        helper.assertTrue(Math.abs(20.0f - attacker.getHealth() - 2.0) < 1e-3,
+                "弹反成功要把这发的 50% 还给攻击者（原始 blocked 4 点 → 2 点），实际掉血 "
+                        + (20.0f - attacker.getHealth()));
 
         // 背后来的一律不算格挡：原版举盾只取消正面半球来的伤害，我们从背后挨的那发不该发奖励
         attacker.setPos(at.x, at.y, at.z - 2.0);
         guard.invulnerableTime = 0;
+        float attackerBeforeBehind = attacker.getHealth();
         dealtTo(guard, attacker, 4.0F);
         helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 1.0,
                 "背后挨打不该算挡下、更不该攒壁障");
+        helper.assertTrue(attacker.getHealth() == attackerBeforeBehind,
+                "没弹反成功就没有反弹：攻击者的血一分都不该少");
         attacker.setPos(at.x, at.y, at.z + 2.0);
 
         for (int i = 0; i < 40; i++) {
@@ -279,6 +287,94 @@ public class NextCardGameTests {
         dealtTo(guard, attacker, 4.0F);
         helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 1.0,
                 "出窗的那一下只算普通格挡，不该攒层");
+
+        helper.succeed();
+    }
+
+    /**
+     * "附带数值"真的挂到身上：+10 护甲、+20% 移速进属性；卡没了就得摘干净。
+     *
+     * <p>这条堵的是覆盖表里排第一的那半：通道折进快照了，但没人把它们投影到原版属性上，
+     * 于是卡表那一整列 {@code +20 护甲值} 是空话——而且表现得很像"这张卡没用"。</p>
+     */
+    @GameTest
+    public void vanillaChannelsLandOnAttributes(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player owner = helper.makeMockSurvivalPlayer();
+        grant(helper, owner, "venom_edge");
+
+        double armorBefore = owner.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ARMOR);
+        double speedBefore = owner.getAttributeValue(
+                net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED);
+        CardCombat.stateOf(owner);   // 上线/命中时同步一次，属性就跟着投影
+
+        double armorAfter = owner.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ARMOR);
+        double speedAfter = owner.getAttributeValue(
+                net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED);
+        helper.assertTrue(Math.abs(armorAfter - armorBefore - 10.0) < 1e-6,
+                "护甲该 +10 点，实际 " + (armorAfter - armorBefore));
+        helper.assertTrue(Math.abs(speedAfter - speedBefore * 1.2) < 1e-9,
+                "移速该是 ×1.2（比值通道，不是点值），实际 " + speedAfter + " vs " + speedBefore);
+
+        CardCombat.stateOf(owner);
+        helper.assertTrue(Math.abs(owner.getAttributeValue(
+                        net.minecraft.world.entity.ai.attributes.Attributes.ARMOR) - armorAfter) < 1e-9,
+                "同一个值重算两遍不能加成两遍（幂等，按 UUID 换）");
+
+        CardAttributes.apply(owner, null);
+        helper.assertTrue(Math.abs(owner.getAttributeValue(
+                        net.minecraft.world.entity.ai.attributes.Attributes.ARMOR) - armorBefore) < 1e-9,
+                "快照清空后我们的修饰必须摘干净");
+        helper.assertTrue(Math.abs(owner.getAttributeValue(
+                        net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED) - speedBefore) < 1e-9,
+                "移速那条也要一起摘");
+
+        helper.succeed();
+    }
+
+    /**
+     * 强制精准：先实打实挨一下（拿窗口），再举盾出窗挡一下——那一下要按精准算、要攒到层。
+     *
+     * <p>与 {@code parryingWithinTheWindowGrantsTheReward} 成对：那张证"出窗不攒"，这张证
+     * "被强制时出窗也攒"。顺序是故意的：**先不举盾挨一下**才有 {@code damage_taken}（举盾挡下的
+     * 那发被原版整个取消，走不到伤害事件，也就拿不到窗口）。</p>
+     */
+    @GameTest
+    public void forcedParryWindowMakesLateBlocksCountAsPrecise(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player guard = helper.makeMockSurvivalPlayer();
+        grant(helper, guard, "cinder_step");
+        grant(helper, guard, "iron_root");
+        String holder = guard.getUUID().toString();
+        net.minecraft.world.phys.Vec3 at = helper.absoluteVec(new net.minecraft.world.phys.Vec3(0.5, 1.0, 0.5));
+        guard.setPos(at.x, at.y, at.z);
+        guard.setYRot(0.0F);
+        guard.yHeadRot = 0.0F;
+        Player attacker = helper.makeMockSurvivalPlayer();
+        attacker.setPos(at.x, at.y, at.z + 2.0);
+
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 0.0,
+                "开局没有壁障层");
+        dealtTo(guard, attacker, 4.0F);   // 没举盾，这发实打实落在身上
+        helper.assertTrue(Triggers.forcedPrecise(holder, CardCombat.HOST.triggers(holder),
+                        CardCombat.HOST.counters(), guard.level().getGameTime() / 20.0),
+                "挨过一下之后应当有强制精准的在途窗口");
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 0.0,
+                "没举盾就没有格挡，窗口拿到了也不该直接攒层");
+
+        guard.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND,
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.SHIELD));
+        guard.startUsingItem(net.minecraft.world.InteractionHand.OFF_HAND);
+        for (int i = 0; i < 40; i++) {
+            guard.tick();
+        }
+        helper.assertTrue(guard.isBlocking() && !ParryTiming.precise(CardCombat.ticksBlocking(guard), 0.4),
+                "前提：还在挡，但按真窗口已经出窗（ticksBlocking=" + CardCombat.ticksBlocking(guard) + "）");
+
+        guard.invulnerableTime = 0;
+        dealtTo(guard, attacker, 4.0F);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 1.0,
+                "被强制的这一次要按精准算，才会攒到壁障层");
 
         helper.succeed();
     }

@@ -7,7 +7,18 @@
     "nextcard:attack",
     "nextcard:counter"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.armor",
+      "value": 10
+    },
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.move_speed",
+      "value": 0.2
+    }
+  ],
   "name": "card.nextcard.venom_edge",
   "texture": "venom_edge"
 }

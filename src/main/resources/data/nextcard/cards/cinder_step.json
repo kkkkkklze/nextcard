@@ -27,6 +27,11 @@
             "id": "wall",
             "amount": 1
           }
+        },
+        {
+          "reflect": {
+            "ratio": 0.5
+          }
         }
       ]
     }
