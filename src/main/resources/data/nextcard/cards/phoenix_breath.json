@@ -5,7 +5,26 @@
     "nextcard:fire",
     "nextcard:attack"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "stacks",
+      "id": "ember",
+      "cap": 3
+    },
+    {
+      "type": "trigger",
+      "on": "tick",
+      "every": 2.0,
+      "actions": [
+        {
+          "stacks": {
+            "id": "ember",
+            "amount": 1
+          }
+        }
+      ]
+    }
+  ],
   "name": "card.nextcard.phoenix_breath",
   "texture": "phoenix_breath",
   "system": "nextcard:rebirth"

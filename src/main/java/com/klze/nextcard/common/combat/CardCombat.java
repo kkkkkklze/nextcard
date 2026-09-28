@@ -165,7 +165,7 @@ public final class CardCombat {
      * 独立伤害走 {@link CardDamageSource}，所以它会正常再过一遍目标的护甲与减免——
      * 它是新的一发，不是把刚才那个数再乘一遍。</p>
      */
-    private static void perform(@Nullable State actor, @Nullable LivingEntity directTarget,
+    public static void perform(@Nullable State actor, @Nullable LivingEntity directTarget,
                                 @Nullable Entity attacker, Triggers.Result result) {
         if (actor == null || result.extraHits().isEmpty() && result.knockbacks().isEmpty()) {
             return;
@@ -223,10 +223,19 @@ public final class CardCombat {
      */
     public static Triggers.Result fire(@Nullable State state, @Nullable Facts facts, String event,
                                        Triggers.Bases bases) {
-        if (state == null || state.triggers().isEmpty() || facts == null) {
+        return fire(state, facts, event, bases, state == null ? List.of() : state.triggers());
+    }
+
+    /**
+     * 同一件事，但<em>只过筛过的子集</em>：周期驱动要的就是"这一 tick 只叫醒到点的那几张"，
+     * 没到点的那张不能因为共用一个事件名就被顺带跑一次。
+     */
+    public static Triggers.Result fire(@Nullable State state, @Nullable Facts facts, String event,
+                                       Triggers.Bases bases, List<Triggers.Bound> bound) {
+        if (state == null || bound.isEmpty() || facts == null) {
             return Triggers.Result.NOTHING;
         }
-        Triggers.Result result = Triggers.fire(event, state.holder(), facts, state.triggers(),
+        Triggers.Result result = Triggers.fire(event, state.holder(), facts, bound,
                 HOST.counters(), HOST.declaredStacks(), state.profile(), bases, state.nowSeconds());
         for (String unsupported : result.unsupported()) {
             if (REPORTED_UNSUPPORTED.add(unsupported)) {

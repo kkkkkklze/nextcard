@@ -1,6 +1,7 @@
 package com.klze.nextcard.gametest;
 
 import com.klze.nextcard.NextCard;
+import com.klze.nextcard.common.combat.CardCadence;
 import com.klze.nextcard.common.combat.CardCombat;
 import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.CardAttributes;
@@ -375,6 +376,44 @@ public class NextCardGameTests {
         dealtTo(guard, attacker, 4.0F);
         helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "wall") == 1.0,
                 "被强制的这一次要按精准算，才会攒到壁障层");
+
+        helper.succeed();
+    }
+
+    /**
+     * 周期驱动真的按节奏跑：卡面写 {@code every: 2.0}，每 40 tick 兑现一次，没到点不追加。
+     *
+     * <p>表是手动拨的（{@link CardCadence#run}），因为 1.20.1 的 GameTest 拿不到真
+     * {@code ServerPlayer}，而"等真 tick"的断言正是时绿时红的来源。四步各钉一件事：
+     * 起算那一 tick 不触发、到点触发一次、下一个周期再来一次、没到点的那一 tick 不动。</p>
+     */
+    @GameTest
+    public void periodicTriggersFireOnTheirOwnClock(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        CardCadence.resetForTests();
+        Player owner = helper.makeMockSurvivalPlayer();
+        grant(helper, owner, "phoenix_breath");
+        String holder = owner.getUUID().toString();
+        long start = owner.level().getGameTime();
+        java.util.List<net.minecraft.world.entity.player.Player> online = java.util.List.of(owner);
+
+        CardCadence.run(online, start);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "ember") == 0.0,
+                "第一次看见这张卡只是起算，不该马上兑现");
+        CardCadence.run(online, start + 39);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "ember") == 0.0,
+                "39 tick 还没到一个 2 秒周期");
+        CardCadence.run(online, start + 40);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "ember") == 1.0,
+                "到点该攒一层");
+        CardCadence.run(online, start + 79);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "ember") == 1.0,
+                "没到点的那一 tick 不能顺带叫醒它");
+        CardCadence.run(online, start + 80);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "ember") == 2.0,
+                "第二个周期照常");
+        helper.assertTrue(CardCadence.trackedPeriods() == 1,
+                "引擎只该记着这一个周期起点：" + CardCadence.trackedPeriods());
 
         helper.succeed();
     }

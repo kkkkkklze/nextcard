@@ -71,6 +71,15 @@ public final class DamageContact {
         return viewBuilder(self, other, angleOffFront).build();
     }
 
+    /**
+     * 没有对手的那一份事实：周期触发（{@code on: tick}）与调试命令读它。
+     * 对面血量取 1.0、入射角取正面——<em>不是"知道在正面"，而是这件事无从谈起</em>，
+     * 所以读这两项的条件本来就不该写进周期触发的 {@code when}。
+     */
+    public static Facts stance(Player owner) {
+        return viewBuilder(owner, null, 0.0).build();
+    }
+
     private static Facts.Builder viewBuilder(@Nullable LivingEntity self, @Nullable LivingEntity other,
                                              double angleOffFront) {
         Facts.Builder builder = Facts.builder()
