@@ -19,6 +19,11 @@ import javax.annotation.Nullable;
  * <p><b>拿不到的留默认值，不猜</b>：发声量（要潜行/噪声系统）、"刚从视野外出现"与
  * "被吸引 / 被控制"（要索敌与控制状态系统）、精英/boss 归类（要内容侧标记）今天都没有世界侧来源，
  * 所以这些条件在世界里恒不成立。恒不成立是安全方向——只会让卡"没触发"，不会让它"错触发"。</p>
+ *
+ * <p><b>没有对面的那些事件（{@code tick}、以及伤害来自非活体的 {@code damage_taken}）里，
+ * {@code target_kind} 会读到 {@code normal}、对面血量读到满格</b>。这不是"引擎认定它是普通怪"，
+ * 而是这项事实无从谈起，只能落回 {@link Facts} 的默认值。所以<em>按目标写的条件不要挂在
+ * {@code tick} 上</em>——那条事件没有"对面"。</p>
  */
 public final class DamageContact {
 
@@ -85,7 +90,10 @@ public final class DamageContact {
         Facts.Builder builder = Facts.builder()
                 .angleOffFront(angleOffFront)
                 .light(self == null ? 15 : self.level().getRawBrightness(self.blockPosition(), 0))
-                .targetKind(kindOf(self));
+                // target_kind 说的永远是<em>对面</em>那位（"处决只打普通敌人"判的是被打的，不是打人的）。
+                // 早先这里传的是 self，于是玩家自己出手时类别恒为 player——"只打普通敌人"那类卡
+                // 永远不响，而"对玩家生效"那类卡永远响：这是会错触发的那一方向。
+                .targetKind(kindOf(other));
         if (self != null) {
             builder.attackerHp(self.getHealth() / Math.max(1.0e-6, self.getMaxHealth()));
             if (self.onGround() && self.getDeltaMovement().horizontalDistanceSqr() > 1.0e-4) {

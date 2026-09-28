@@ -31,8 +31,17 @@ public final class Triggers {
     /** 守方挨的这一下。 */
     public static final String DAMAGE_TAKEN = "damage_taken";
 
+    /** 攻方出手的这一下（{@link #HIT} 的另一半：出手看动作，命中看结果，挥空之外的废刀也算）。 */
+    public static final String ATTACK = "attack";
+
     /** 攻方打中的这一下。 */
     public static final String HIT = "hit";
+
+    /** 攻方这一发<em>真的</em>造成了伤害（结算后不为 0；基数装的是最终值，不是进管线的那个数）。 */
+    public static final String DAMAGE_DEALT = "damage_dealt";
+
+    /** 攻方把对面打死了。 */
+    public static final String KILL = "kill";
 
     /** 守方格挡住了、但没卡在窗口里。 */
     public static final String BLOCK_SUCCESS = "block_success";

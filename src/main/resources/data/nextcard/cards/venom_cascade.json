@@ -8,7 +8,54 @@
     "nextcard:poison",
     "nextcard:attack"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "stacks",
+      "id": "venom",
+      "cap": 5,
+      "duration": 6
+    },
+    {
+      "type": "trigger",
+      "on": "attack",
+      "actions": [
+        {
+          "stacks": {
+            "id": "venom",
+            "amount": 1
+          }
+        }
+      ]
+    },
+    {
+      "type": "trigger",
+      "on": "hit",
+      "when": [
+        {
+          "stacks": {
+            "id": "venom",
+            "at_least": 3
+          }
+        }
+      ],
+      "actions": [
+        {
+          "damage": {
+            "basis": "const",
+            "coefficient": 2.0
+          }
+        }
+      ]
+    },
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.melee_damage",
+      "source": {
+        "counter": "venom",
+        "per_layer": 0.04
+      }
+    }
+  ],
   "name": "card.nextcard.venom_cascade",
   "texture": "venom_cascade"
 }

@@ -8,7 +8,32 @@
     "nextcard:poison",
     "nextcard:attack"
   ],
-  "effects": [],
+  "effects": [
+    {
+      "type": "trigger",
+      "on": "kill",
+      "when": [
+        {
+          "target_kind": "normal"
+        }
+      ],
+      "actions": [
+        {
+          "damage": {
+            "basis": "attack",
+            "coefficient": 0.5,
+            "radius": 4.0
+          }
+        },
+        {
+          "knockback": {
+            "strength": 0.5,
+            "radius": 4.0
+          }
+        }
+      ]
+    }
+  ],
   "name": "card.nextcard.chain_reaction",
   "texture": "chain_reaction"
 }

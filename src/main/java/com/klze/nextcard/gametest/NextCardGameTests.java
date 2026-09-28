@@ -418,6 +418,153 @@ public class NextCardGameTests {
         helper.succeed();
     }
 
+    /**
+     * 出手与造成伤害是两条事件：一刀被对面的免疫打成 0，"出手"照记，"造成伤害"不许记。
+     *
+     * <p>这条盯的是{@code attack} 与 {@code damage_dealt} 被写成一件事的错法——它们本来就该分开：
+     * {@code AttackEntityEvent} 由 {@code Player#attack} 的第一行发出（原版源码核过），那一刻
+     * 这一发<em>还没有数</em>；而数落在没落在身上要等结算完。用一个"必然致命、必然被免疫"的
+     * 受害者把两者劈开：0.05 点血让任何一点伤害都算致命，免疫把最终值打成 0。</p>
+     *
+     * <p>第二步反过来验"落地才记账"：满血挨一刀，掉了血才有第二层。</p>
+     */
+    @GameTest
+    public void swingsAreCountedEvenWhenTheBladeDoesNotLand(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "venom_cascade");
+        grant(helper, striker, "grave_bloom");
+        Player victim = helper.makeMockSurvivalPlayer();
+        grant(helper, victim, "last_stand");
+        String holder = striker.getUUID().toString();
+
+        victim.setHealth(0.05F);
+        victim.invulnerableTime = 0;
+        striker.attack(victim);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "venom") == 1.0,
+                "出手就要叠毒，哪怕这一刀最后一点伤害都没落地");
+        helper.assertTrue(Math.abs(victim.getHealth() - 0.05F) < 1e-6,
+                "前提：那发致命被免疫打成 0，受害者一分血都不该少，实际 " + victim.getHealth());
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "bloom") == 0.0,
+                "这一发没造成任何伤害，damage_dealt 不该响");
+
+        victim.setHealth(20.0F);
+        victim.invulnerableTime = 0;
+        striker.attack(victim);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "venom") == 2.0,
+                "第二刀照样算出手");
+        helper.assertTrue(victim.getHealth() < 20.0F,
+                "先确认这一刀真的落地了（否则下面那条 bloom 是假的绿），实际 " + victim.getHealth());
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "bloom") == 1.0,
+                "真的造成了伤害才该记账");
+
+        helper.succeed();
+    }
+
+    /**
+     * 击杀在世界里叫醒 {@code kill}，并且只叫醒<em>真的打死</em>的那一次。
+     *
+     * <p>「连锁反应」写的是 {@code on: kill, when: [{target_kind: normal}]}，所以这条一次证两件事：
+     * ① 击杀事件真的派发（不致命的削血之后邻居一点事没有，致命那发之后邻居掉血并被推开）；
+     * ② {@code target_kind} 判的是<em>对面</em>那位而不是持卡人自己——修之前这里取的是
+     * {@code kindOf(self)}，玩家持卡永远读到 {@code player}，条件恒不成立，邻居永远不会被波及。</p>
+     */
+    @GameTest
+    public void killingANormalTargetChainsOntoANeighbour(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "chain_reaction");
+        net.minecraft.world.phys.Vec3 anchor = helper.absoluteVec(new net.minecraft.world.phys.Vec3(0.5, 1.0, 0.5));
+        striker.setPos(anchor.x, anchor.y, anchor.z);
+
+        Zombie doomed = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, new BlockPos(1, 1, 1));
+        Zombie neighbour = helper.spawnWithNoFreeWill(EntityType.ZOMBIE, new BlockPos(1, 1, 1));
+        doomed.setPos(anchor.x, anchor.y, anchor.z + 1.0);
+        neighbour.setPos(anchor.x, anchor.y, anchor.z + 2.0);
+
+        double untouchedBefore = neighbour.getHealth();
+        doomed.invulnerableTime = 0;
+        doomed.hurt(doomed.damageSources().playerAttack(striker), 1.0F);
+        helper.assertTrue(!doomed.isDeadOrDying(), "前提：这一刀只是削血，还没打死");
+        helper.assertTrue(Math.abs(neighbour.getHealth() - untouchedBefore) < 1e-6,
+                "没打死就没有连锁，邻居不该掉血：" + untouchedBefore + " → " + neighbour.getHealth());
+
+        doomed.invulnerableTime = 0;
+        doomed.hurt(doomed.damageSources().playerAttack(striker), 999.0F);
+        helper.assertTrue(doomed.isDeadOrDying(), "这一刀要真的打死它");
+        double chained = untouchedBefore - neighbour.getHealth();
+        helper.assertTrue(chained > 0.0, "半径 4 格内的邻居该吃到击杀连锁那一发，实际 " + chained);
+        helper.assertTrue(chained < 2.0,
+                "只该吃到一发；吃到 " + chained + " 说明连锁把自己又触发了一次");
+        helper.assertTrue(neighbour.getDeltaMovement().horizontalDistanceSqr() > 0.0,
+                "它从没被直接攻击过，被推动只能是连锁那一发的击退");
+
+        helper.succeed();
+    }
+
+    /**
+     * 没有对面的事件上，"只碰直接目标"的动作要<em>报出来</em>并跳过，不许把服务器打抛。
+     *
+     * <p>这条是给内容侧看的：{@code tick}（周期）与 {@code attack} 上没有"打我的那位"，
+     * 半径 0 的动作在这里天然没有对象。计划由测试直接交给 {@link CardCombat#perform}，
+     * 因为要的是那条<em>非正常路径</em>——写卡的人踩到时是周期触发，而周期触发的表要手动拨时钟才有。</p>
+     */
+    @GameTest
+    public void actionsNeedingATargetAreReportedWhenThereIsNone(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player owner = helper.makeMockSurvivalPlayer();
+        grant(helper, owner, "storm_pulse");
+        CardCombat.State state = CardCombat.stateOf(owner);
+        helper.assertTrue(state != null, "有卡的玩家必须拿得到生效状态");
+
+        Triggers.Result plan = new Triggers.Result(null, java.util.List.of(),
+                java.util.List.of(new Triggers.ExtraHit(new ResourceLocation(NextCard.MODID, "storm_pulse"),
+                        3.0, 0.0, Triggers.Target.AROUND_OWNER, "测试用：半径 0 且没有对面")),
+                java.util.List.of(), java.util.List.of());
+
+        CardCombat.perform(state, null, null, plan);
+        helper.assertTrue(CardCombat.reportedGaps().stream()
+                        .anyMatch(gap -> gap.contains("storm_pulse") && gap.contains("没有对面")),
+                "没有对象的动作要报出来，不许静默跳过：" + CardCombat.reportedGaps());
+
+        helper.succeed();
+    }
+
+    /**
+     * 层数条件在世界里读的是<em>当下</em>的账，不是恒 0。
+     *
+     * <p>{@code {"stacks": {"id": "venom", "at_least": 3}}} 这类"叠满才怎样"的写法，判定读的是
+     * 事实快照；如果接管点没把 {@code CounterStore} 的层数贴进快照，这条条件在游戏里<em>恒不成立</em>，
+     * 表现和"这张卡没用"一模一样。三刀各钉一件事：一、两层时不额外补伤害；二、第三刀补了；
+     * 三、层数账本身按刀涨。</p>
+     */
+    @GameTest
+    public void stackGatedConditionsReadTheLiveLayerCount(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "venom_cascade");
+        Player victim = helper.makeMockSurvivalPlayer();
+        String holder = striker.getUUID().toString();
+
+        double first = swing(striker, victim);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "venom") == 1.0,
+                "一刀该叠一层");
+        helper.assertTrue(first < 1.0, "一层时只有出手那一击本身，掉了 " + first);
+
+        double second = swing(striker, victim);
+        helper.assertTrue(second < 1.0,
+                "两层还没到 at_least: 3，不该有额外那一发，掉了 " + second);
+
+        double third = swing(striker, victim);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "venom") == 3.0,
+                "三刀三层");
+        helper.assertTrue(third > second + 1.0,
+                "叠满三层的那一刀要额外补一发（2 点常数伤害，被原版无敌帧按差值削成 1.8），"
+                        + "实际 " + third + " vs 上一刀的 " + second);
+
+        helper.succeed();
+    }
+
     /** 把卡记进玩家的卡账（卡账是真源，宿主由 {@code CardCombat} 在结算时同步）。 */
     private static void grant(GameTestHelper helper, Player player, String cardPath) {
         CardLedger ledger = PlayerCardState.of(player);
@@ -515,6 +662,17 @@ public class NextCardGameTests {
         victim.invulnerableTime = 0;  // 无敌帧会把"没掉血"伪装成"被免疫了"
         float before = victim.getHealth();
         victim.hurt(source, amount);
+        return before - victim.getHealth();
+    }
+
+    /**
+     * 让这位玩家真的挥一刀（走原版 {@code Player#attack} 的完整链路，所以
+     * {@code AttackEntityEvent}→伤害→{@code hit} 一路都会过）。返回这一刀掉的血。
+     */
+    private static double swing(Player striker, Player victim) {
+        victim.invulnerableTime = 0;
+        double before = victim.getHealth();
+        striker.attack(victim);
         return before - victim.getHealth();
     }
 }

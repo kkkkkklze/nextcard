@@ -67,6 +67,25 @@ public record Facts(double attackerHpRatio, double targetHpRatio, double angleOf
         return Math.abs(180.0 - angleOffFront) % 360.0;
     }
 
+    /**
+     * 把"这个持卡人当前的层数账"贴到事实上——`stacks` 条件在世界里唯一的来源。
+     *
+     * <p>为什么不直接从 {@code CounterStore} 读进判定：判定必须是只读快照的纯函数（见类注释）。
+     * 接管点在叫醒触发器之前把账本贴一次，于是"有 3 层毒才怎样"这类条件既能在无头环境里
+     * 用 builder 喂死，也能在游戏里跟着真实层数走。</p>
+     *
+     * <p>同名的已有项<em>以传入的为准</em>（贴的是当下真相），其余项原样保留。</p>
+     */
+    public Facts withLayers(Map<String, Integer> current) {
+        if (current == null || current.isEmpty()) {
+            return this;
+        }
+        Map<String, Integer> merged = new TreeMap<>(layers);
+        merged.putAll(current);
+        return new Facts(attackerHpRatio, targetHpRatio, angleOffFront, distance, light, noise,
+                stillSeconds, chargeSeconds, targetKind, flags, merged, counts);
+    }
+
     /** 这一发是否在目标背后 {@code halfAngle}° 的扇区里（《00》背后 120° = 半角 60°）。 */
     public boolean fromBehind(double halfAngle) {
         return angleOffBack() <= halfAngle;

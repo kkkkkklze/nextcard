@@ -15,6 +15,7 @@ import com.klze.nextcard.core.effect.Predicates;
 import com.klze.nextcard.core.effect.Settlement;
 import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.player.CardLedger;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.damagesource.DamageSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
@@ -22,10 +23,13 @@ import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraftforge.event.entity.living.LivingDamageEvent;
+import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.living.ShieldBlockEvent;
+import net.minecraftforge.event.entity.player.AttackEntityEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -43,10 +47,12 @@ import javax.annotation.Nullable;
  * 形状取自姊妹工程求仙问道已实测过的同一处（判据用计数器，不用血量差，因为原版会把小数取整，
  * "0.94 掉血"被读成"没打中"是踩过的坑）。</p>
  *
- * <p><b>只接了被词表证实存在的四条通道 + 一种动作</b>：{@code all_damage}（全伤）、
- * {@code melee_damage}（近战＝武器分类之一）、{@code direction_bonus}（方向增伤）、守方的
- * {@code damage_reduction}（减伤），以及 {@code lethal_immunity}（致命免疫——它走的是
- * {@link Triggers} → {@link Predicate} 的理由 → 守方管线第①步否决这条完整链路）。
+ * <p><b>接管点叫醒的事件（2026-09-28）</b>：{@code attack}（出手）／{@code hit}（打中）／
+ * {@code damage_dealt}（真的造成了伤害）／{@code kill}（打死）／{@code damage_taken}（挨的这一下）／
+ * {@code block_success} 与 {@code parry_success}（挡下与精准挡下）／{@code tick}（周期到点，
+ * 在 {@code CardCadence} 里）。结算读四条通道：{@code all_damage}、{@code melee_damage}、
+ * {@code direction_bonus}、守方 {@code damage_reduction}；六种动作有执行器（{@code lethal_immunity}、
+ * {@code stacks}、{@code damage}、{@code knockback}、{@code reflect}、{@code force_parry}）。
  * 暴击、破甲、护盾点数、穿透声明都<em>故意留空</em>——它们的口径（概率从哪来、盾是谁的账、
  * 哪张卡能声明无视）在内容侧那份《02-名词表》与我们的通道表还没对齐（见交付文档 Q5），
  * 我自己发明一份就是第二真相。</p>
@@ -71,6 +77,14 @@ public final class CardCombat {
 
     public static List<String> lastTrace() {
         return lastTrace;
+    }
+
+    /**
+     * 已经报出来的缺口（没有执行器的动作、没有对象的动作）。
+     * GameTest 用它证明"报出来了"这件事本身，而不是只信日志。
+     */
+    public static List<String> reportedGaps() {
+        return List.copyOf(REPORTED_UNSUPPORTED);
     }
 
     /** 测试之间用来重置计数，避免彼此串扰（同 {@code gametest-helper-coords} 那条教训）。 */
@@ -107,7 +121,66 @@ public final class CardCombat {
         if (!CardDamageSource.isEngineExtra(damageSource)) {
             Triggers.Result onHit = fire(attacker, attackView, Triggers.HIT, basesOf(attacker, incoming));
             perform(attacker, victim, source, onHit);
+
+            // "造成伤害时"要的是<em>结算后</em>那个真的落到身上的数：被对面免疫成 0 的那发不算，
+            // 所以它比 hit 少一条通道（同一个"打中了"，一个看动作成没成，一个看数落没落）。
+            double dealt = result == null ? incoming : result.value();
+            if (dealt > 0.0) {
+                Triggers.Result onDealt = fire(attacker, attackView, Triggers.DAMAGE_DEALT,
+                        basesOf(attacker, dealt));
+                perform(attacker, victim, source, onDealt);
+            }
         }
+    }
+
+    /**
+     * 出手。挂在 {@link AttackEntityEvent} 上，而不是挂在伤害事件上：原版在
+     * {@code Player#attack} 的<em>第一行</em>就发它（源码 {@code ForgeHooks#onPlayerAttackTarget}），
+     * 后面那一刀哪怕被无敌帧吃掉、哪怕伤害算出来是 0，"我出手打了它"这件事仍然成立。
+     *
+     * <p>与 {@code hit} 的分工就在这个"废刀也算"上：连击/叠毒那类卡要的是挥出去的每一下，
+     * 而打空、打不疼都要照记。</p>
+     *
+     * <p>基数里 {@code incoming} 是 0——出手那一刻这发<em>还没有数</em>。卡面若在 {@code attack}
+     * 上写 {@code damage} 且 {@code basis: incoming}，会照实报"基数 × 系数 = 0"，不会静默，
+     * 也不假装有个数。</p>
+     */
+    @SubscribeEvent
+    public static void onPlayerAttack(AttackEntityEvent swing) {
+        State striker = stateOf(swing.getEntity());
+        if (striker == null || striker.triggers().isEmpty()) {
+            return;
+        }
+        Entity target = swing.getTarget();
+        Triggers.Result result = fire(striker, DamageContact.attackView(striker.player(), target),
+                Triggers.ATTACK, basesOf(striker, 0.0));
+        // 出手这一侧没有"打我的那位"，所以反弹类的动作在这里天然没有对象
+        perform(striker, target instanceof LivingEntity living ? living : null, null, result);
+    }
+
+    /**
+     * 击杀。1.20.1 <b>只有</b> {@link LivingDeathEvent}（"死亡正在被处理"），没有别的模组生态里
+     * 那个 {@code LivingDiedEvent}（源码核过：这个版本的 Forge 根本没有这个类）。它是可取消的，
+     * 所以万一别的模组把这次死亡取消掉，我们的 {@code kill} 已经响过一次了——这条偏差记在
+     * {@code docs/引擎侧进度-2026-09-25.md}，不做"看起来更准"的修补。
+     *
+     * <p>归因用 {@code DamageSource#getEntity()}（箭与三叉戟会归到<em>射手</em>身上），与
+     * {@code hit}／{@code reflect} 同一位。自伤致死不算击杀：那没有"击杀对象"。</p>
+     */
+    @SubscribeEvent
+    public static void onLivingDeath(LivingDeathEvent death) {
+        LivingEntity victim = death.getEntity();
+        Entity killer = death.getSource().getEntity();
+        if (killer == null || killer == victim) {
+            return;
+        }
+        State striker = stateOf(killer);
+        if (striker == null || striker.triggers().isEmpty()) {
+            return;
+        }
+        Triggers.Result result = fire(striker, DamageContact.attackView(killer, victim),
+                Triggers.KILL, basesOf(striker, 0.0));
+        perform(striker, victim, killer, result);
     }
 
     /**
@@ -180,15 +253,44 @@ public final class CardCombat {
                 }
                 continue;
             }
+            if (directTarget == null && noRadius(hit.radius(), hit.cardId(), "damage")) {
+                continue;
+            }
             for (LivingEntity target : around(owner, directTarget, hit.radius())) {
                 target.hurt(new CardDamageSource(hit.cardId(), owner, hit.attribution()), (float) hit.amount());
             }
         }
         for (Triggers.KnockbackHit knock : result.knockbacks()) {
+            if (directTarget == null && noRadius(knock.radius(), knock.cardId(), "knockback")) {
+                continue;
+            }
             for (LivingEntity target : around(owner, directTarget, knock.radius())) {
                 target.knockback(knock.strength(), -Math.sin(Math.toRadians(owner.getYRot())),
                         Math.cos(Math.toRadians(owner.getYRot())));
             }
+        }
+    }
+
+    /**
+     * "半径 0 = 只碰直接目标"，而这个事件上<em>没有直接目标</em>（{@code tick} 与 {@code attack}
+     * 之外的路径都算）——那这一发没有对象。原先这里会把 {@code null} 塞进 {@code List.of}，
+     * 于是服务器在周期触发上直接抛异常；现在<em>报出来再跳过</em>，因为静默跳过会让人以为
+     * "这卡没用"，而真相是这张卡要写成带半径的。
+     *
+     * @return true 表示这件事已经报过并该跳过
+     */
+    private static boolean noRadius(double radius, ResourceLocation cardId, String action) {
+        if (radius > 0.0) {
+            return false;
+        }
+        report(cardId + " 的 " + action + " 要打在直接目标上，而这个事件没有对面（写半径才能搜目标）");
+        return true;
+    }
+
+    /** 未落地的事报一次，不许静默（同 {@link #REPORTED_UNSUPPORTED} 的那条纪律）。 */
+    private static void report(String message) {
+        if (REPORTED_UNSUPPORTED.add(message)) {
+            NextCard.LOGGER.warn("[nextcard] {}", message);
         }
     }
 
@@ -235,7 +337,7 @@ public final class CardCombat {
         if (state == null || bound.isEmpty() || facts == null) {
             return Triggers.Result.NOTHING;
         }
-        Triggers.Result result = Triggers.fire(event, state.holder(), facts, bound,
+        Triggers.Result result = Triggers.fire(event, state.holder(), withLayers(state, facts), bound,
                 HOST.counters(), HOST.declaredStacks(), state.profile(), bases, state.nowSeconds());
         for (String unsupported : result.unsupported()) {
             if (REPORTED_UNSUPPORTED.add(unsupported)) {
@@ -246,6 +348,24 @@ public final class CardCombat {
             HOST.markDirty(state.holder());
         }
         return result;
+    }
+
+    /**
+     * 叫醒触发器之前，把这个持有者<em>当前</em>的叠层账贴进事实快照。
+     *
+     * <p>没有这一步，卡面写的 {@code {"stacks": {"id": "venom", "at_least": 3}}}（"叠满三层才怎样"）
+     * 在世界里恒不成立——判定读的是快照，而快照没人喂层数。引擎自有的资源（冷却、已开的
+     * 强制精准窗口）在 {@code trigger.} 命名空间下，不算叠层，不贴。</p>
+     */
+    private static Facts withLayers(State state, Facts facts) {
+        Map<String, Integer> current = new LinkedHashMap<>();
+        HOST.counters().snapshot(state.nowSeconds()).getOrDefault(state.holder(), Map.of())
+                .forEach((resource, held) -> {
+                    if (!resource.startsWith(Triggers.COOLDOWN_PREFIX)) {
+                        current.put(resource, (int) held.layers());
+                    }
+                });
+        return facts.withLayers(current);
     }
 
     /**
