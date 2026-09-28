@@ -64,6 +64,11 @@ public final class Combinators {
         public String describe() {
             return "同时满足 " + children.size() + " 条";
         }
+
+        @Override
+        public void collectRefs(Refs refs) {
+            collectAll(children, refs);
+        }
     }
 
     /** 任意一条成立。短路求值：第一条款成立就停，但归因会指出是哪一条放行的。 */
@@ -90,6 +95,11 @@ public final class Combinators {
         public String describe() {
             return "任意一条（" + children.size() + " 选 1）";
         }
+
+        @Override
+        public void collectRefs(Refs refs) {
+            collectAll(children, refs);
+        }
     }
 
     /** 取反。<b>不</b>反转归因：理由写的仍是里面那条为什么成立/不成立。 */
@@ -104,6 +114,11 @@ public final class Combinators {
         @Override
         public String describe() {
             return "非「" + child.describe() + "」";
+        }
+
+        @Override
+        public void collectRefs(Refs refs) {
+            child.collectRefs(refs);
         }
     }
 
@@ -133,6 +148,15 @@ public final class Combinators {
             return otherwise == null ? "若「" + guard.describe() + "」则「" + thenCon.describe() + "」"
                     : "若「" + guard.describe() + "」则「" + thenCon.describe() + "」，否则「"
                             + otherwise.describe() + "」";
+        }
+
+        @Override
+        public void collectRefs(Refs refs) {
+            guard.collectRefs(refs);
+            thenCon.collectRefs(refs);
+            if (otherwise != null) {
+                otherwise.collectRefs(refs);
+            }
         }
     }
 
@@ -165,15 +189,25 @@ public final class Combinators {
         public String describe() {
             return children.size() + " 条里成立 " + k + " 条";
         }
+
+        @Override
+        public void collectRefs(Refs refs) {
+            collectAll(children, refs);
+        }
     }
 
     /**
      * 顺序轮转：这一次只看第 {@code cursor} 条，看完由调用方把指针推进。
      *
      * <p>指针<em>不在这里存</em>：它是"这个玩家在这张卡上走到第几步"，属于持久对象
-     * （{@link CounterStore} 的一条资源，名字就是 {@code id}），由接管点取出来放进
+     * （{@link CounterStore} 的一条资源，键是 {@code trigger.cursor.<id>}），由执行器取出来放进
      * {@link Facts#count(String)}。所以轮转本身仍是纯函数，可无头断言。
      * 循环（"每 N 次一轮，转完再来"）是同一条判据取模后的样子，不另开一种组合子。</p>
+     *
+     * <p><b>推进时机只有一种读法</b>：整条 {@code when} 门槛<em>成立</em>之后才 +1，不是"看过一次就推进"。
+     * "每三段刀路各不同"要的是走完这一步才进下一步；走不完就一直停在这一步（这也是 {@code sequence}
+     * 与 {@code count} 共用一本账、却不共用一个键族的原因）。卡表里目前没有卡用轮转，
+     * 所以这条先按唯一自洽的读法定下；若内容侧其实想要"每次派动都推进"，要说一句再改。</p>
      */
     public record Sequence(String id, List<Predicate> children) implements Predicate {
 
@@ -197,6 +231,19 @@ public final class Combinators {
         @Override
         public String describe() {
             return "顺序轮转 " + children.size() + " 步（指针 " + id + "）";
+        }
+
+        @Override
+        public void collectRefs(Refs refs) {
+            refs.cursor(id);
+            collectAll(children, refs);
+        }
+    }
+
+    /** 组合子的子节点逐个收一遍（叶子自己点名，组合子只往下传）。 */
+    static void collectAll(List<Predicate> children, Predicate.Refs refs) {
+        for (Predicate child : children) {
+            child.collectRefs(refs);
         }
     }
 

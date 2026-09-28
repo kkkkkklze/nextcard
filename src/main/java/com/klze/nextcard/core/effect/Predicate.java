@@ -1,5 +1,8 @@
 package com.klze.nextcard.core.effect;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 /**
  * 判定条件（谓词）：只回答"现在成不成立"，不碰世界、不算数值。
  *
@@ -18,6 +21,55 @@ public interface Predicate {
 
     /** 这个条件叫什么（留痕与报错用，不含具体数值）。 */
     String describe();
+
+    /**
+     * 这棵子树<em>点名</em>了哪些账本资源。执行器据此决定要读哪几个键——
+     * 不整本抄账本是因为一张卡的树只有几个节点，而账本会随一局游戏一直长。
+     *
+     * <p>默认什么都不收：只有引用型叶子（{@code stacks} / {@code count}）与
+     * {@code sequence} 才点名资源。</p>
+     */
+    default void collectRefs(Refs refs) {
+    }
+
+    /** 三本账的点名清单：叠层、事件累计、轮转指针。 */
+    final class Refs {
+
+        private final Set<String> stacks = new LinkedHashSet<>();
+        private final Set<String> events = new LinkedHashSet<>();
+        private final Set<String> cursors = new LinkedHashSet<>();
+
+        public Refs stack(String id) {
+            stacks.add(id);
+            return this;
+        }
+
+        public Refs event(String name) {
+            events.add(name);
+            return this;
+        }
+
+        public Refs cursor(String id) {
+            cursors.add(id);
+            return this;
+        }
+
+        public Set<String> stacks() {
+            return Set.copyOf(stacks);
+        }
+
+        public Set<String> events() {
+            return Set.copyOf(events);
+        }
+
+        public Set<String> cursors() {
+            return Set.copyOf(cursors);
+        }
+
+        public boolean isEmpty() {
+            return stacks.isEmpty() && events.isEmpty() && cursors.isEmpty();
+        }
+    }
 
     /** 判定结论：不成立也要说清是哪一条差在哪。 */
     record Verdict(boolean holds, String reason) {

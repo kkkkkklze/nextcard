@@ -29,7 +29,6 @@ import net.minecraftforge.event.entity.player.AttackEntityEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -337,7 +336,7 @@ public final class CardCombat {
         if (state == null || bound.isEmpty() || facts == null) {
             return Triggers.Result.NOTHING;
         }
-        Triggers.Result result = Triggers.fire(event, state.holder(), withLayers(state, facts), bound,
+        Triggers.Result result = Triggers.fire(event, state.holder(), facts, bound,
                 HOST.counters(), HOST.declaredStacks(), state.profile(), bases, state.nowSeconds());
         for (String unsupported : result.unsupported()) {
             if (REPORTED_UNSUPPORTED.add(unsupported)) {
@@ -348,24 +347,6 @@ public final class CardCombat {
             HOST.markDirty(state.holder());
         }
         return result;
-    }
-
-    /**
-     * 叫醒触发器之前，把这个持有者<em>当前</em>的叠层账贴进事实快照。
-     *
-     * <p>没有这一步，卡面写的 {@code {"stacks": {"id": "venom", "at_least": 3}}}（"叠满三层才怎样"）
-     * 在世界里恒不成立——判定读的是快照，而快照没人喂层数。引擎自有的资源（冷却、已开的
-     * 强制精准窗口）在 {@code trigger.} 命名空间下，不算叠层，不贴。</p>
-     */
-    private static Facts withLayers(State state, Facts facts) {
-        Map<String, Integer> current = new LinkedHashMap<>();
-        HOST.counters().snapshot(state.nowSeconds()).getOrDefault(state.holder(), Map.of())
-                .forEach((resource, held) -> {
-                    if (!resource.startsWith(Triggers.COOLDOWN_PREFIX)) {
-                        current.put(resource, (int) held.layers());
-                    }
-                });
-        return facts.withLayers(current);
     }
 
     /**

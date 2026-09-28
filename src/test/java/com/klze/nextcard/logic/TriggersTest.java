@@ -177,6 +177,74 @@ public class TriggersTest {
         assertEquals(0.0, Triggers.layers(counters, HOLDER, "wall"), "consume 是扣层，不是加负数");
     }
 
+    /**
+     * 事件累计与轮转指针都从账本里来（{@code count} 与 {@code sequence} 唯一的出处）。
+     *
+     * <p>钉两件事：① {@code at_least: 2} 从<em>第二次</em>派动起成立——计数先把这一次算进去，
+     * 若反过来"先判后加"，"累计两次之后"要等到第三次才响，那是差一格的错，而且方向是"该响没响"，
+     * 玩家只会以为这卡没用；② 计数与冷却/在途是<em>两本账</em>，永不过期的累计数不许混进
+     * "还剩几次可用"那个读数里。</p>
+     */
+    @Test
+    public void countedEventsFeedTheCountConditionFromTheSecondOccurrence() {
+        CounterStore counters = new CounterStore();
+        Map<String, StackClause> declared = Map.of("mark", stack("mark", 5, 0));
+        List<Triggers.Bound> bound = List.of(bound("echo", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"when\":[{\"count\": {\"on\": \"hit\", \"at_least\": 2}}],"
+                + " \"actions\":[{\"stacks\":{\"id\":\"mark\",\"amount\":1}}]}"));
+
+        assertTrue(fire(Triggers.HIT, Facts.NONE, bound, counters, declared, null, 0.0).fired().isEmpty(),
+                "第一次出手还不该满足 at_least: 2");
+        assertEquals(1, Triggers.times(counters, HOLDER, Triggers.HIT), "账要跟着记这一次");
+        assertEquals(0.0, Triggers.layers(counters, HOLDER, "mark"));
+
+        assertEquals(1, fire(Triggers.HIT, Facts.NONE, bound, counters, declared, null, 1.0).fired().size(),
+                "第二次就该兑现（不是等到第三次）");
+        assertEquals(2, Triggers.times(counters, HOLDER, Triggers.HIT));
+        assertEquals(1.0, Triggers.layers(counters, HOLDER, "mark"));
+        assertEquals(0.0, Triggers.inFlight(counters, HOLDER, 1.0),
+                "累计次数不是「在途」，别把它算进「还剩几次可用」那个读数里");
+    }
+
+    /**
+     * 轮转指针：<b>整条门槛过了</b>才进下一步，卡住就一直是这一步（读法见
+     * {@link com.klze.nextcard.core.effect.Combinators.Sequence}）。
+     *
+     * <p>用"第 1 步要{@code moving}、第 2 步要{@code !moving}"这对互斥条件来证三件事：
+     * 过不去就不推进、过得去就推进、走满一轮之后<em>取模回到第 1 步</em>（"每 N 次一轮"是同一条判据，
+     * 不是另一种组合子）。指针若偷偷自己走，第 2 步会在第一次就命中，第一条断言立刻红。</p>
+     */
+    @Test
+    public void rotationCursorAdvancesOnlyWhenTheStepPasses() {
+        CounterStore counters = new CounterStore();
+        Map<String, StackClause> declared = Map.of("fin", stack("fin", 9, 0));
+        List<Triggers.Bound> bound = List.of(bound("combo", "{\"type\":\"trigger\",\"on\":\"hit\","
+                + " \"when\":[{\"sequence\":[{\"moving\":true},{\"moving\":false}],"
+                + " \"cursor\":\"step\"}],"
+                + " \"actions\":[{\"stacks\":{\"id\":\"fin\",\"amount\":1}}]}"));
+        Facts standing = Facts.NONE;
+        Facts moving = Facts.builder().with("moving").build();
+
+        assertTrue(fire(Triggers.HIT, standing, bound, counters, declared, null, 0.0).fired().isEmpty(),
+                "指针停在第 1 步（要求 in 移动），站着不动就不该兑现");
+        assertEquals(0, Triggers.cursor(counters, HOLDER, "step"), "没过就不许推进");
+
+        assertEquals(1, fire(Triggers.HIT, moving, bound, counters, declared, null, 1.0).fired().size());
+        assertEquals(1, Triggers.cursor(counters, HOLDER, "step"), "过了才进下一步");
+
+        assertEquals(1, fire(Triggers.HIT, standing, bound, counters, declared, null, 2.0).fired().size(),
+                "现在站在第 2 步（要求没在动）");
+        assertEquals(2, Triggers.cursor(counters, HOLDER, "step"));
+
+        assertTrue(fire(Triggers.HIT, standing, bound, counters, declared, null, 3.0).fired().isEmpty(),
+                "转完一轮回到第 1 步，站着就又不该兑现");
+        assertEquals(2, Triggers.cursor(counters, HOLDER, "step"), "卡住的那一步不推进");
+
+        assertEquals(1, fire(Triggers.HIT, moving, bound, counters, declared, null, 4.0).fired().size());
+        assertEquals(3, Triggers.cursor(counters, HOLDER, "step"));
+        assertEquals(3.0, Triggers.layers(counters, HOLDER, "fin"), "三步各兑现一次");
+    }
+
     /** {@code ignore_cap} 是唯一能把上限摘掉的写法（卡面"层数不再有上限"那类）。 */
     @Test
     public void ignoreCapIsTheOnlyWayPastTheDeclaredCeiling() {

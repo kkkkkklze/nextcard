@@ -68,22 +68,32 @@ public record Facts(double attackerHpRatio, double targetHpRatio, double angleOf
     }
 
     /**
-     * 把"这个持卡人当前的层数账"贴到事实上——`stacks` 条件在世界里唯一的来源。
+     * 把账本上<em>被点到的</em>那几笔贴到事实上——{@code stacks}（层数）与 {@code count}（累计次数、
+     * 轮转指针）两类条件唯一的来源。
      *
-     * <p>为什么不直接从 {@code CounterStore} 读进判定：判定必须是只读快照的纯函数（见类注释）。
-     * 接管点在叫醒触发器之前把账本贴一次，于是"有 3 层毒才怎样"这类条件既能在无头环境里
-     * 用 builder 喂死，也能在游戏里跟着真实层数走。</p>
+     * <p>为什么不直接从 {@link CounterStore} 读进判定：判定必须是只读快照的纯函数（见类注释）。
+     * 执行器在评测之前贴一次，于是"有 3 层毒才怎样"、"本局第三次弹反才怎样"、"走到轮转第 2 步才怎样"
+     * 这三类条件既能在无头环境里用 builder 喂死，也能在游戏里跟着真实的账走。</p>
      *
-     * <p>同名的已有项<em>以传入的为准</em>（贴的是当下真相），其余项原样保留。</p>
+     * <p>只贴<em>点名要的那几笔</em>（{@link Predicate.Refs}），不整本抄账本——账本会随一局游戏一直长，
+     * 而一张卡的条件树只有几个节点。同名的已有项以传入的为准（贴的是当下真相），其余项原样保留。</p>
      */
-    public Facts withLayers(Map<String, Integer> current) {
-        if (current == null || current.isEmpty()) {
+    public Facts withLedger(Map<String, Integer> layers, Map<String, Integer> counts) {
+        boolean noLayers = layers == null || layers.isEmpty();
+        boolean noCounts = counts == null || counts.isEmpty();
+        if (noLayers && noCounts) {
             return this;
         }
-        Map<String, Integer> merged = new TreeMap<>(layers);
-        merged.putAll(current);
+        Map<String, Integer> mergedLayers = new TreeMap<>(this.layers);
+        Map<String, Integer> mergedCounts = new TreeMap<>(this.counts);
+        if (!noLayers) {
+            mergedLayers.putAll(layers);
+        }
+        if (!noCounts) {
+            mergedCounts.putAll(counts);
+        }
         return new Facts(attackerHpRatio, targetHpRatio, angleOffFront, distance, light, noise,
-                stillSeconds, chargeSeconds, targetKind, flags, merged, counts);
+                stillSeconds, chargeSeconds, targetKind, flags, mergedLayers, mergedCounts);
     }
 
     /** 这一发是否在目标背后 {@code halfAngle}° 的扇区里（《00》背后 120° = 半角 60°）。 */

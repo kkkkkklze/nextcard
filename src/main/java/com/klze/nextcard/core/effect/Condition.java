@@ -134,7 +134,25 @@ public record Condition(String key, double number, String text, String stackId, 
         }
         String ref = body.get(refKey).getAsString();
         double atLeast = body.get("at_least").getAsDouble();
+        if (key.equals("count")) {
+            // 计数的对象必须是已注册<em>事件</em>：写错一个事件名的计数条件永远不会成立，而它的表现
+            // 与"这张卡没用"一模一样——这类静默只能靠加载期拦住。
+            Mechanics.Slot slot = Mechanics.slot(ref);
+            if (slot == null || slot.kind() != Mechanics.Kind.EVENT) {
+                errors.add("condition count.on must be a registered event, got " + ref);
+                return null;
+            }
+        }
         return key.equals("stacks") ? stacks(ref, atLeast) : count(ref, atLeast);
+    }
+
+    @Override
+    public void collectRefs(Refs refs) {
+        if (isStacks()) {
+            refs.stack(stackId);
+        } else if (isCount()) {
+            refs.event(event);
+        }
     }
 
     public boolean isStacks() {

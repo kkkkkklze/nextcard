@@ -3,6 +3,7 @@ package com.klze.nextcard.core.effect;
 import net.minecraft.resources.ResourceLocation;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -77,6 +78,24 @@ public final class Triggers {
 
     /** 引擎自有资源的命名空间（冷却、在途窗口都归它）。 */
     public static final String COOLDOWN_PREFIX = "trigger.";
+
+    /** 事件累计账（{@code count} 条件读它）。也在 {@code trigger.} 命名空间内，内容声明的叠层进不来。 */
+    public static final String COUNT_PREFIX = COOLDOWN_PREFIX + "count.";
+
+    /** 轮转指针账（{@code sequence} 的 {@code cursor} 读它）。 */
+    public static final String CURSOR_PREFIX = COOLDOWN_PREFIX + "cursor.";
+
+    /**
+     * 计数与指针用的那条规则：<b>无上限、不过期</b>。它们不是"层数"，是"次数"——
+     * 上限由条件自己写（{@code at_least}），到期由"本局"这个边界管（见 {@link #fire} 的注释）。
+     */
+    private static final CounterStore.Rule COUNTING = new CounterStore.Rule(
+            Double.POSITIVE_INFINITY, 0.0, CounterStore.Expiry.PER_LAYER);
+
+    /** 一个计数键（事件名或指针 id 都走同一个形状，方便测试读）。 */
+    public static CounterStore.Key countKey(String holder, String prefix, String name) {
+        return new CounterStore.Key(holder, prefix + name);
+    }
 
     /** 一张卡上的一个触发子句（带上来源卡 id，冷却与归因都要它）。 */
     public record Bound(ResourceLocation cardId, TriggerClause clause) {
@@ -178,6 +197,11 @@ public final class Triggers {
                              @Nullable MechanicProfile profile, Bases bases, double nowSeconds) {
         List<Bound> ordered = new ArrayList<>(bound);
         ordered.sort((left, right) -> left.cardId().compareTo(right.cardId()));
+        // 事件计数把<em>这一次</em>也算进去再加：第 N 次派动读到的就是 N，所以
+        // {@code at_least: 3} 从第三次开始成立，而不是等到第四次。
+        // "本局"的边界＝服务端进程里这本账活着的时候（与周期起点同口径，世界重启重新起算、不写存档）。
+        counters.gain(countKey(holder, COUNT_PREFIX, event), 1, COUNTING, nowSeconds);
+        Facts viewed = withLedger(holder, ordered, counters, facts);
         String veto = null;
         List<Firing> fired = new ArrayList<>();
         List<ExtraHit> extraHits = new ArrayList<>();
@@ -188,10 +212,11 @@ public final class Triggers {
             if (!event.equals(clause.on())) {
                 continue;
             }
-            Predicate.Verdict gate = Predicates.allHold(clause.when(), facts);
+            Predicate.Verdict gate = Predicates.allHold(clause.when(), viewed);
             if (!gate.holds()) {
                 continue;
             }
+            advanceCursors(holder, clause, counters, nowSeconds);
             for (Action action : clause.actions()) {
                 switch (action.type()) {
                     case LETHAL_IMMUNITY -> {
@@ -238,6 +263,69 @@ public final class Triggers {
             }
         }
         return new Result(veto, fired, extraHits, knockbacks, unsupported);
+    }
+
+    /**
+     * 把这次要评的子句<em>点名</em>的那几笔账贴进快照：层数、事件累计、轮转指针。
+     *
+     * <p>只读被点到的键、不整本抄账本：账本会随一局游戏一直长（一次命中一笔），而一张卡的条件树
+     * 只有几个节点。判定本身仍然只读 {@link Facts}，这条贴的动作是它和真实账之间唯一的接缝。</p>
+     */
+    private static Facts withLedger(String holder, List<Bound> bound, CounterStore counters, Facts facts) {
+        Predicate.Refs refs = refsOf(bound);
+        if (refs.isEmpty()) {
+            return facts;
+        }
+        Map<String, Integer> layers = new LinkedHashMap<>();
+        for (String id : refs.stacks()) {
+            layers.put(id, (int) counters.amount(new CounterStore.Key(holder, id)));
+        }
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (String name : refs.events()) {
+            counts.put(name, (int) counters.amount(countKey(holder, COUNT_PREFIX, name)));
+        }
+        for (String id : refs.cursors()) {
+            counts.put(id, (int) counters.amount(countKey(holder, CURSOR_PREFIX, id)));
+        }
+        return facts.withLedger(layers, counts);
+    }
+
+    /** 一批子句点名的资源总和（同一张卡上写几遍同一个 id 也只读一次）。 */
+    private static Predicate.Refs refsOf(List<Bound> bound) {
+        Predicate.Refs refs = new Predicate.Refs();
+        for (Bound entry : bound) {
+            for (Predicate leaf : entry.clause().when()) {
+                leaf.collectRefs(refs);
+            }
+        }
+        return refs;
+    }
+
+    /**
+     * 整条门槛过了，才把这张卡上写着的轮转指针各推进一格。
+     *
+     * <p>读法见 {@link Combinators.Sequence}：走完这一步才进下一步，走不完就一直停在这里。
+     * 推进发生在<em>本次评测之后</em>，所以第 N 步读到的指针是 N−1 之后的值、判的也是第 N 步自己。</p>
+     */
+    private static void advanceCursors(String holder, TriggerClause clause, CounterStore counters,
+                                       double nowSeconds) {
+        Predicate.Refs refs = new Predicate.Refs();
+        for (Predicate leaf : clause.when()) {
+            leaf.collectRefs(refs);
+        }
+        for (String id : refs.cursors()) {
+            counters.gain(countKey(holder, CURSOR_PREFIX, id), 1, COUNTING, nowSeconds);
+        }
+    }
+
+    /** 某个事件本局累计次数（调试命令与测试的读法）。 */
+    public static int times(CounterStore counters, String holder, String event) {
+        return (int) counters.amount(countKey(holder, COUNT_PREFIX, event));
+    }
+
+    /** 某个轮转指针本局走到第几步（同上）。 */
+    public static int cursor(CounterStore counters, String holder, String cursorId) {
+        return (int) counters.amount(countKey(holder, CURSOR_PREFIX, cursorId));
     }
 
     /** 独立伤害：基数 × 系数。{@code radius_per_stack} 还没有对应叠层，报出来而不是按 0 算。 */
@@ -408,13 +496,20 @@ public final class Triggers {
     /**
      * 这个持有者当前在途的引擎自有计数（冷却 + 已开的窗口），用于调试命令与测试断言。
      * 读 {@link CounterStore#snapshot}，所以"到点的那部分"天然不算在途，也不需要先 {@code expire}。
+     *
+     * <p>事件累计（{@code trigger.count.*}）与轮转指针（{@code trigger.cursor.*}）<b>不算在途</b>：
+     * 它们本来就永不过期，把它们算进来会让"还剩几次可用"这种读数变成几百。</p>
      */
     public static double inFlight(CounterStore counters, String holder, double nowSeconds) {
         Map<String, CounterStore.Held> byResource = counters.snapshot(nowSeconds)
                 .getOrDefault(holder, Map.of());
         double total = 0.0;
         for (Map.Entry<String, CounterStore.Held> entry : byResource.entrySet()) {
-            if (entry.getKey().startsWith(COOLDOWN_PREFIX)) {
+            String resource = entry.getKey();
+            if (resource.startsWith(COUNT_PREFIX) || resource.startsWith(CURSOR_PREFIX)) {
+                continue;
+            }
+            if (resource.startsWith(COOLDOWN_PREFIX)) {
                 total += entry.getValue().layers();
             }
         }

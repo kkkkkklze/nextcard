@@ -13,12 +13,38 @@
       "duration": 8
     },
     {
+      "type": "stacks",
+      "id": "echo",
+      "cap": 9,
+      "duration": 8
+    },
+    {
       "type": "trigger",
       "on": "damage_dealt",
       "actions": [
         {
           "stacks": {
             "id": "bloom",
+            "amount": 1
+          }
+        }
+      ]
+    },
+    {
+      "type": "trigger",
+      "on": "damage_dealt",
+      "when": [
+        {
+          "count": {
+            "on": "damage_dealt",
+            "at_least": 2
+          }
+        }
+      ],
+      "actions": [
+        {
+          "stacks": {
+            "id": "echo",
             "amount": 1
           }
         }

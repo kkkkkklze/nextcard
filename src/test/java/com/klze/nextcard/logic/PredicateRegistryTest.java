@@ -114,26 +114,35 @@ public class PredicateRegistryTest {
     }
 
     /**
-     * 层数是怎么<em>进到</em>快照里的：{@link Facts#withLayers} 是接管点唯一的贴法。
+     * 账本是怎么<em>进到</em>快照里的：{@link Facts#withLedger} 是执行器唯一的贴法。
      *
-     * <p>条件叶子早就验过 {@code stacks}（上面那张正反例表），但"叶子会判"与"世界里有数"是两件事——
-     * 这一条钉的是贴的动作本身：读得到、同名以当下为准、贴的时候不改掉别的事实。
-     * 世界里那条出处（真的是 {@code CounterStore} 的账）由 GameTest
-     * {@code stackGatedConditionsReadTheLiveLayerCount} 钉住。</p>
+     * <p>条件叶子早就验过 {@code stacks} 与 {@code count}（上面那张正反例表），但"叶子会判"与
+     * "账本里有数"是两件事——这一条钉的是贴的动作本身：读得到、同名以当下为准、贴的时候不改掉
+     * 别的事实、两本账（层数与次数）各贴各的互不覆盖。世界里那条出处（真的是
+     * {@code CounterStore} 的账）由 GameTest {@code stackGatedConditionsReadTheLiveLayerCount}
+     * 与 {@code countedEventsReachConditionsInTheWorld} 钉住。</p>
      */
     @Test
-    public void layerSnapshotReachesTheStacksCondition() {
+    public void ledgerSnapshotReachesTheReferenceConditions() {
         Predicate gate = parse("{\"stacks\": {\"id\": \"venom\", \"at_least\": 3}}", new ArrayList<>());
         Facts bare = Facts.builder().targetKind("normal").build();
         assertFalse(gate.test(bare).holds(), "没贴账之前一层都不该有");
 
-        Facts three = bare.withLayers(java.util.Map.of("venom", 3, "wall", 1));
+        Facts three = bare.withLedger(java.util.Map.of("venom", 3, "wall", 1), java.util.Map.of());
         Predicate.Verdict verdict = gate.test(three);
         assertTrue(verdict.holds(), "贴进来就该读得到: " + verdict.reason());
         assertEquals(1, three.layers("wall"), 1e-9, "一次贴多条都要在");
-        assertEquals("normal", three.targetKind(), "贴层数不能顺手改掉别的事实");
-        assertEquals(5, three.withLayers(java.util.Map.of("venom", 5)).layers("venom"),
+        assertEquals("normal", three.targetKind(), "贴账不能顺手改掉别的事实");
+        assertEquals(5, three.withLedger(java.util.Map.of("venom", 5), java.util.Map.of()).layers("venom"),
                 1e-9, "同名的以当下这份为准（层数会涨会掉）");
+
+        Predicate counted = parse("{\"count\": {\"on\": \"parry_success\", \"at_least\": 2}}",
+                new ArrayList<>());
+        assertFalse(counted.test(three).holds(), "贴了层数不等于贴了次数——两本账分开");
+        assertTrue(counted.test(three.withLedger(java.util.Map.of(), java.util.Map.of("parry_success", 2)))
+                .holds(), "次数贴进来就该读得到");
+        assertEquals(3, three.withLedger(java.util.Map.of(), java.util.Map.of("parry_success", 1))
+                .layers("venom"), 1e-9, "贴次数不能改掉层数那本账");
     }
 
     /** 角度档由《00》背后 120° 的定义对称推出来：正面 ±60、正面+两侧 ±120、全向不限。 */
@@ -195,6 +204,10 @@ public class PredicateRegistryTest {
         assertError("{\"target_kind\": \" miniboss\"}");
         assertError("{\"unseen\": 3}");
         assertError("{\"stacks\": {\"id\": \"wall\"}}");
+        // 计数对象必须是已注册事件：写错一个事件名的计数条件永远不会成立，表现与"这卡没用"一样，
+        // 只能靠加载期拦住（2026-09-28 起）。
+        assertError("{\"count\": {\"on\": \"heavy_wound\", \"at_least\": 1}}");
+        assertError("{\"count\": {\"on\": \"channel.armor\", \"at_least\": 1}}");
     }
 
     private static void assertError(String json) {

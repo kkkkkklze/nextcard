@@ -81,11 +81,13 @@ public class CombinatorTest {
     /** 若…则…否则…：走哪条分支要写在理由里（处决"普通敌人斩杀，精英只吃重创"就是这个形状）。 */
     @Test
     public void ifThenElsePicksOneBranchAndSaysWhich() {
+        // else 那一支用 count 当"总能过"的门槛。计数对象必须是已注册<em>事件</em>（写错事件名是
+        // 加载错误），所以这里取 damage_dealt 而不是随便造一个名字。
         Predicate branch = ok("{\"if\": {\"target_kind\": \"normal\"},"
                 + " \"then\": {\"target_hp_below\": 0.36},"
-                + " \"else\": {\"count\": {\"on\": \"heavy_wound\", \"at_least\": 0}}}");
+                + " \"else\": {\"count\": {\"on\": \"damage_dealt\", \"at_least\": 1}}}");
         Facts normalLow = Facts.builder().targetKind("normal").targetHp(0.2).build();
-        Facts elite = Facts.builder().targetKind("elite").targetHp(0.2).count("heavy_wound", 1).build();
+        Facts elite = Facts.builder().targetKind("elite").targetHp(0.2).count("damage_dealt", 1).build();
         assertTrue(branch.test(normalLow).holds(), branch.test(normalLow).reason());
         assertTrue(branch.test(normalLow).reason().contains("若"), branch.test(normalLow).reason());
         assertTrue(branch.test(elite).holds(), branch.test(elite).reason());

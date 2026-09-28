@@ -565,6 +565,38 @@ public class NextCardGameTests {
         helper.succeed();
     }
 
+    /**
+     * "本局累计 N 次之后"这类条件在世界里读的是真实账本。
+     *
+     * <p>「墓畔花开」写的是 {@code on: damage_dealt, when: [{count: {on: damage_dealt, at_least: 2}}]}
+     * ——第一次真伤害只有「花开」，第二次起才同时有「回声」。这两层分开断言，才能证明计数是
+     * <em>把这一次也算进去</em>再加的（反过来"先判后加"会让第一次回声等到第三次，方向是"该响没响"）。</p>
+     */
+    @GameTest
+    public void countedEventsReachConditionsInTheWorld(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "grave_bloom");
+        Player victim = helper.makeMockSurvivalPlayer();
+        String holder = striker.getUUID().toString();
+
+        swing(striker, victim);
+        helper.assertTrue(Triggers.times(CardCombat.HOST.counters(), holder, Triggers.DAMAGE_DEALT) == 1,
+                "这一发的数要跟着记账");
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "bloom") == 1.0,
+                "没有门槛的那条每次都兑现");
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "echo") == 0.0,
+                "at_least: 2 在第一次不该成立");
+
+        swing(striker, victim);
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "bloom") == 2.0,
+                "花开照旧涨到第二层");
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "echo") == 1.0,
+                "第二次真伤害就该有回声——计数把这一次算进去了");
+
+        helper.succeed();
+    }
+
     /** 把卡记进玩家的卡账（卡账是真源，宿主由 {@code CardCombat} 在结算时同步）。 */
     private static void grant(GameTestHelper helper, Player player, String cardPath) {
         CardLedger ledger = PlayerCardState.of(player);
