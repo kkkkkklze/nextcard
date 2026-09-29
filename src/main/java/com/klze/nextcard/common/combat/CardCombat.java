@@ -13,6 +13,7 @@ import com.klze.nextcard.core.effect.MechanicClause;
 import com.klze.nextcard.core.effect.MechanicProfile;
 import com.klze.nextcard.core.effect.ParryTiming;
 import com.klze.nextcard.core.effect.Predicates;
+import com.klze.nextcard.core.effect.ShieldBlock;
 import com.klze.nextcard.core.effect.Settlement;
 import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.player.CardLedger;
@@ -83,6 +84,13 @@ public final class CardCombat {
     @Nullable
     private static java.util.function.DoubleSupplier critRollOverride;
 
+    /**
+     * 格挡减伤的比例来源。<b>null = 读 manifest 的 {@code combat.block_reduction}</b>（生产走这条）；
+     * 非 null 表示被测试钉住了——否则这个数只在 JSON 里，世界内断言就无法证明"改了它，结果真的变了"。
+     */
+    @Nullable
+    private static Double blockReductionOverride;
+
     private CardCombat() {
     }
 
@@ -109,11 +117,23 @@ public final class CardCombat {
         lastTrace = List.of();
         REPORTED_UNSUPPORTED.clear();
         critRollOverride = () -> CritRules.NO_ROLL;   // 测试态默认"不判定暴击"，精确掉血断言才成立
+        blockReductionOverride = null;                // 测试态回到 manifest 的数，不留下上一次的钉值
     }
 
     /** 只给测试用：把这一发的暴击判定钉成指定的 roll（0.0 = 一定中到概率那一次）。 */
     public static void pinCritRoll(double roll) {
         critRollOverride = () -> roll;
+    }
+
+    /** 只给测试用：把"挡掉多少"钉成指定比例，用来证明这个数真的在链路上（生产不碰）。 */
+    public static void pinBlockReduction(double reduction) {
+        blockReductionOverride = reduction;
+    }
+
+    /** 挡掉的比例：被钉住时用钉住的值，否则读 manifest（缺省 1.0 = 与原版一致）。 */
+    private static double blockReduction() {
+        return blockReductionOverride != null ? blockReductionOverride
+                : CardContentReload.current().manifest().combat().blockReduction();
     }
 
     /** 生产用世界的随机源；被钉住时用钉住的那个值。 */
@@ -245,9 +265,23 @@ public final class CardCombat {
      *
      * <p>第三道闸门是能力本身：没被授予 {@code parry} 机制就两个事件都不发——挡下近战是原版
      * 一直在做的事，不是一张卡的触发器。</p>
+     *
+     * <p>"挡掉多少"与这三道闸门无关，所以在它们<em>之前</em>就写回事件：它是全局战斗口径，
+     * 一个没戴任何卡的人举盾也该按同一张表来（{@code manifest.json} 的
+     * {@code combat.block_reduction}，出厂 1.0 = 原版整个取消）。</p>
      */
     @SubscribeEvent
     public static void onShieldBlock(ShieldBlockEvent blocked) {
+        double incoming = blocked.getOriginalBlockedDamage();
+        // 挡掉多少是<em>全局战斗口径</em>，与"这个人的卡要不要响"无关，所以它排在所有闸门之前：
+        // 没戴卡的玩家举盾也按 manifest 的数来。数从 {@code data/nextcard/manifest.json} 的
+        // {@code combat.block_reduction} 读（klze 2026-09-30："格挡先随便填个数，到时候到游戏里
+        // 改 JSON 尝试手感"）。出厂值 1.0 与原版一致（整个取消），所以这条改动今天不动任何手感；
+        // 0.2 = 只取消两成，其余照常走护甲与减免。
+        double cancelled = ShieldBlock.blockedOf(incoming, blockReduction());
+        if (cancelled != incoming) {
+            blocked.setBlockedDamage((float) cancelled);
+        }
         if (!(blocked.getEntity() instanceof Player owner)) {
             return;
         }
@@ -263,7 +297,8 @@ public final class CardCombat {
         if (parry == null) {
             return;
         }
-        double incoming = blocked.getOriginalBlockedDamage();
+        // 触发器的基数用<em>原始那一发</em>：判定看的是"举盾多久"，与挡掉多少无关；而奖励
+        // （"反弹该次伤害 50%"）如果跟着这个数一起缩水，内容侧调手感就等于在偷偷改卡面。
         MechanicProfile profile = defender.profile() == null ? new MechanicProfile(Map.of())
                 : defender.profile();
         double window = ParryTiming.windowSeconds(parry.param("base_window", 0.0), profile);

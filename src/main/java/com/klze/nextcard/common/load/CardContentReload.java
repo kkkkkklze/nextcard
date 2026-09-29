@@ -8,7 +8,9 @@ import com.klze.nextcard.core.card.CardIndex;
 import com.klze.nextcard.core.load.ContentCatalog;
 import com.klze.nextcard.core.load.ContentReader;
 import com.klze.nextcard.core.load.LoadResult;
+import com.klze.nextcard.core.load.Manifest;
 import com.klze.nextcard.core.tag.TagIndex;
+import com.mojang.serialization.JsonOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -20,10 +22,12 @@ import net.minecraftforge.eventbus.api.SubscribeEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.io.Reader;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * 卡牌内容热重载（M1 第一片）。
@@ -43,6 +47,9 @@ public final class CardContentReload extends SimplePreparableReloadListener<Card
 
     public static final String CARD_DIR = "cards";
     public static final String TAG_DIR = "card_tags";
+
+    /** 全局策略那一份（{@code data/nextcard/manifest.json}）：移除策略 + 战斗手感数。 */
+    public static final String MANIFEST_FILE = "manifest.json";
 
     private static final CardContentReload INSTANCE = new CardContentReload();
     private static volatile ContentBundle current = ContentBundle.EMPTY;
@@ -97,8 +104,33 @@ public final class CardContentReload extends SimplePreparableReloadListener<Card
         if (!errors.isEmpty()) {
             return new Result(ContentBundle.EMPTY, errors, parseFailures);
         }
+        // 全局策略跟着同一份快照换：它里面有战斗手感数（格挡到底减多少），
+        // 半份新半份旧会出现"卡按旧策略折、格挡按新数挡"。读不到或读错都是错误，
+        // 不"当它没写"——那正是 DFU optionalFieldOf 吞非法值那一类陷阱。
+        Manifest manifest = Manifest.DEFAULT;
+        try {
+            Optional<Resource> file = manager.getResource(
+                    new ResourceLocation(NextCard.MODID, MANIFEST_FILE));
+            if (file.isPresent()) {
+                try (Reader reader = file.get().openAsReader()) {
+                    JsonElement parsed = JsonParser.parseReader(reader);
+                    // codec 之前先过 strict：越界/类型错的值在 optionalFieldOf 里会被吞成"没写"
+                    errors.addAll(Manifest.validate(parsed));
+                    manifest = Manifest.CODEC.parse(JsonOps.INSTANCE, parsed)
+                            .resultOrPartial(msg -> errors.add(MANIFEST_FILE + ": " + msg))
+                            .orElse(manifest);
+                }
+            } else {
+                errors.add(MANIFEST_FILE + ": 缺这份全局策略（宁可保留上一版，不要静默用默认值）");
+            }
+        } catch (IOException e) {
+            errors.add(MANIFEST_FILE + ": 读不出来 " + e);
+        }
+        if (!errors.isEmpty()) {
+            return new Result(ContentBundle.EMPTY, errors, parseFailures);
+        }
         return new Result(new ContentBundle(tags.value(), cards.value(),
-                tagFiles.value().size(), cardFiles.value().size()), List.of(), parseFailures);
+                tagFiles.value().size(), cardFiles.value().size(), manifest), List.of(), parseFailures);
     }
 
     @Override

@@ -1,5 +1,6 @@
 package com.klze.nextcard.logic;
 
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.klze.nextcard.core.card.CardDefinition;
@@ -124,5 +125,55 @@ public class ContentParityTest {
                 }).orElseThrow();
         assertEquals(1, manifest.removeItem().refundDraws());
         assertTrue(manifest.removeItem().consumeSurvival());
+        assertEquals(1.0, manifest.combat().blockReduction(), 1e-9,
+                "格挡减伤的出厂值必须是 1.0（= 与原版一样整个取消）：这个数是给内容侧在游戏里改 JSON"
+                        + "试手感用的，出厂就改手感等于替他们做决定");
+        assertTrue(Manifest.validate(files.get("nextcard:manifest.json")).isEmpty(),
+                "发出去的这份 manifest 自己得先过 strict 那道闸门");
+    }
+
+    /**
+     * 手感数越界必须是错误，不能"夹一下"，也不能"当它没写"。
+     *
+     * <p>{@code block_reduction} 是"挡掉的比例"，0~1 之外没有意义，写成 1.5 或 -0.2 一定是笔误；
+     * 带引号的 {@code "0.5"} 是手改 JSON 最常见的那种错。<b>codec 自己拦不住</b>——
+     * {@code OptionalFieldCodec#decode}（DFU 6.0.8）在子 codec 失败时返回的是
+     * {@code success(Optional.empty())}，越界值与"没写这一行"是同一件事，接着落到默认值上。
+     * 所以下面先用一条断言把"codec 确实静默放行"钉成事实（它哪天不静默了这条会红，那是好事），
+     * 再要求 {@link Manifest#validate} 必须报出来。真正的闸门在 validate 这一道。</p>
+     */
+    @Test
+    public void combatTuningNumbersRejectValuesOutOfRange() {
+        for (String bad : new String[]{"1.5", "-0.2", "\"0.5\""}) {
+            JsonElement json = JsonParser.parseString("{\"combat\": {\"block_reduction\": " + bad + "}}");
+            assertTrue(Manifest.CODEC.parse(JsonOps.INSTANCE, json).result().isPresent(),
+                    "前提：codec 对 " + bad + " 是静默的（strict 那一道存在的理由就在这里）");
+            List<String> errors = Manifest.validate(json);
+            assertEquals(1, errors.size(), "越界的 block_reduction 必须正好报一条错，实际 " + errors);
+            assertTrue(errors.get(0).contains("block_reduction"),
+                    "报错要点名是哪个键: " + errors);
+        }
+
+        // 键名写错也等于"没写"，同一道闸门要一起拦
+        List<String> typo = Manifest.validate(JsonParser.parseString(
+                "{\"combat\": {\"block_reducton\": 0.2}}"));
+        assertEquals(1, typo.size(), "写错的键名必须报错，实际 " + typo);
+        assertTrue(typo.get(0).contains("block_reducton"), "要报出那个写错的键名: " + typo);
+
+        // 同一个闸门也管另外两段（它们带的是同一个静默）
+        assertEquals(1, Manifest.validate(JsonParser.parseString(
+                "{\"remove_item\": {\"refund_draws\": 99}}")).size(), "refund_draws 越界同样要报错");
+
+        assertTrue(Manifest.validate(JsonParser.parseString(
+                "{\"combat\": {\"block_reduction\": 0.2}}")).isEmpty(), "范围内的值不该报错");
+        assertTrue(Manifest.validate(JsonParser.parseString("{}")).isEmpty(),
+                "整段缺省是合法的：缺省走默认值，不是错误");
+
+        assertEquals(0.2, Manifest.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString(
+                "{\"combat\": {\"block_reduction\": 0.2}}")).result().orElseThrow()
+                .combat().blockReduction(), 1e-9, "范围内的值要照收（内容侧要能改）");
+        assertEquals(1.0, Manifest.CODEC.parse(JsonOps.INSTANCE, JsonParser.parseString("{}"))
+                .result().orElseThrow().combat().blockReduction(), 1e-9,
+                "整段缺省时回到 1.0（缺省 = 不改手感，不是悄悄改成别的数）");
     }
 }

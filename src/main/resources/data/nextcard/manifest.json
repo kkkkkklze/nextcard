@@ -2,5 +2,8 @@
   "remove_item": {
     "refund_draws": 1,
     "consume_survival": true
+  },
+  "combat": {
+    "block_reduction": 1.0
   }
 }

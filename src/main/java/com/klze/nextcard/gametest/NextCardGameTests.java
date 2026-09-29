@@ -826,6 +826,58 @@ public class NextCardGameTests {
         helper.succeed();
     }
 
+    /**
+     * manifest 里那个数真的在链路上：同一个 4 点伤害、同一个人、同一个站位，只改"挡掉多少"，
+     * 落到身上的数就跟着它变。
+     *
+     * <p>这位<b>没有戴任何卡</b>——这正是这条断言的形状：挡掉多少是<em>全局</em>战斗口径，
+     * 排在 {@code parry} 那三道闸门之前。哪天有人把 {@code setBlockedDamage} 挪回闸门后面，
+     * 或者把它写成"减伤通道"（顺带把盾的磨损也缩了），这条会红。</p>
+     */
+    @GameTest
+    public void theBlockNumberSaysHowMuchTheShieldCancels(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player guard = helper.makeMockSurvivalPlayer();
+        guard.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND,
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.SHIELD));
+        net.minecraft.world.phys.Vec3 at = helper.absoluteVec(new net.minecraft.world.phys.Vec3(0.5, 1.0, 0.5));
+        guard.setPos(at.x, at.y, at.z);
+        guard.setYRot(0.0F);
+        guard.yHeadRot = 0.0F;
+        Player attacker = helper.makeMockSurvivalPlayer();
+        attacker.setPos(at.x, at.y, at.z + 2.0);   // 正面半球，否则原版根本不发这个事件
+
+        guard.startUsingItem(net.minecraft.world.InteractionHand.OFF_HAND);
+        for (int i = 0; i < 6; i++) {
+            guard.tick();
+        }
+        helper.assertTrue(guard.isBlocking(), "前提：举盾 6 tick 后原版应当认他在挡");
+        helper.assertTrue(PlayerCardState.of(guard).size() == 0, "前提：这位一张卡都没有");
+        helper.assertTrue(Math.abs(CardContentReload.current().manifest().combat().blockReduction() - 1.0) < 1e-9,
+                "出厂 manifest 里那个数就得是 1.0——下面换的只是同一个入口读到的数");
+
+        CardCombat.pinBlockReduction(1.0);
+        double vanilla = dealtTo(guard, attacker, 4.0F);
+        helper.assertTrue(Math.abs(vanilla) < 1e-3,
+                "1.0 = 出厂值 = 与原版一样整个取消，实际掉血 " + vanilla);
+
+        CardCombat.pinBlockReduction(0.5);
+        double halved = dealtTo(guard, attacker, 4.0F);
+        helper.assertTrue(Math.abs(halved - 2.0) < 1e-3,
+                "0.5 只取消一半，剩下 2 点要照常走护甲（护甲 0），实际掉血 " + halved);
+
+        CardCombat.pinBlockReduction(0.0);
+        double nothing = dealtTo(guard, attacker, 4.0F);
+        helper.assertTrue(Math.abs(nothing - 4.0) < 1e-3,
+                "0 = 这盾白举，整发照算，实际掉血 " + nothing);
+
+        helper.assertTrue(guard.getUseItem().getDamageValue() == 15,
+                "盾的磨损按原版算法只看原始那一发（1+floor(4)=5，三下共 15），不跟着这个数缩水，实际 "
+                        + guard.getUseItem().getDamageValue());
+
+        helper.succeed();
+    }
+
     /** 摆一个朝指定朝向的受害者（yaw 0 = 朝 +Z，所以 +Z 那边站的人就是正面）。 */
     private static Player facing(GameTestHelper helper, net.minecraft.world.phys.Vec3 at, float yaw) {
         Player victim = helper.makeMockSurvivalPlayer();

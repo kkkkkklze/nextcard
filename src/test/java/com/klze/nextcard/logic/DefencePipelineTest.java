@@ -3,6 +3,7 @@ package com.klze.nextcard.logic;
 import com.klze.nextcard.core.effect.AttackPipeline;
 import com.klze.nextcard.core.effect.DefencePipeline;
 import com.klze.nextcard.core.effect.Settlement;
+import com.klze.nextcard.core.effect.ShieldBlock;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -139,5 +140,31 @@ public class DefencePipelineTest {
                 bare.traces().stream().map(trace -> trace.step()).toList());
         assertEquals(100.0, bare.landed(), 1e-9, "守方空账时原样交付");
         assertEquals(Set.of(), Set.copyOf(bare.bypassed()), "没声明穿透时不该有跳过记录");
+    }
+
+    /**
+     * 举盾挡掉多少是 manifest 里那个数（klze 2026-09-30 的裁定：先给个数，内容侧在游戏里改 JSON
+     * 试手感）。这三条断言就是"改这个数到底改变了什么"的出处：出厂 1.0 必须与原版<em>逐位相同</em>，
+     * 否则这条改动今天就在动所有人的手感。
+     */
+    @Test
+    public void theShieldCancelsExactlyTheFractionTheNumberAsksFor() {
+        assertEquals(100.0, ShieldBlock.blockedOf(100.0, 1.0), 1e-9, "1.0 = 原版整个取消");
+        assertEquals(0.0, ShieldBlock.remainingOf(100.0, 1.0), 1e-9);
+        assertEquals(20.0, ShieldBlock.blockedOf(100.0, 0.2), 1e-9, "0.2 = 只取消两成");
+        assertEquals(80.0, ShieldBlock.remainingOf(100.0, 0.2), 1e-9,
+                "剩下那 80 要照常走护甲与减免——盾不是减伤通道");
+        assertEquals(0.0, ShieldBlock.blockedOf(100.0, 0.0), 1e-9, "0 = 这盾白举");
+    }
+
+    /** 越界的数不许变成新机制：负数是"挡出伤害"，大于 1 是"挡出额外的伤害"，都不是这个数的语义。 */
+    @Test
+    public void aReductionOutsideZeroToOneIsClampedInsteadOfInventingBehavior() {
+        assertEquals(0.0, ShieldBlock.clamped(-0.2), 1e-9);
+        assertEquals(1.0, ShieldBlock.clamped(1.5), 1e-9);
+        assertEquals(0.0, ShieldBlock.clamped(Double.NaN), 1e-9, "NaN 也不能漏进结算");
+        assertEquals(0.0, ShieldBlock.blockedOf(0.0, 1.0), 1e-9, "没有进来的伤害就没有可挡的");
+        assertEquals(0.0, ShieldBlock.blockedOf(-5.0, 0.5), 1e-9,
+                "原版根本不会为空伤害发这个事件，这里也不给它算出个负数");
     }
 }
