@@ -56,9 +56,19 @@ public final class AttackPipeline {
         OWN_BUFF("专属buff"),
         SPECIAL_DAMAGE("特殊伤害"),
         CRIT("暴击"),
-        DIRECTION("方向增伤"),
         FLAT_THIS_SOURCE("只加本伤害源"),
         EXTRA_SETTLEMENT("追加结算"),
+
+        /**
+         * 方向增伤：《00》公式里那句<em>最外层加法</em>（"…×（1+专属buff）＋ 方向增伤"），
+         * 不是乘区——它按"基础数值 × 方向增伤率"加在最后。
+         * 2026-09-30 纠正：这里"方向"指**方向卡那一族（燎原/惊雷/寒霜，即火/雷/冰流派）**，
+         * 与"从背后打"无关；几何那一族另开 {@link #BACKSTAB}。
+         */
+        DIRECTION("方向增伤"),
+
+        /** 背刺增伤：只有这一发的接触落在目标背后扇区内才加（《02》"背后 120° 额外一次 30%"）。 */
+        BACKSTAB("背刺增伤"),
 
         /** 交付：交给守方管线的东西（数值 + 分类 + 穿透声明）。 */
         DELIVER("交付");
@@ -90,9 +100,10 @@ public final class AttackPipeline {
      * @param extraSettlements 追加结算（乘区之外）
      * @param penetration      这次攻击声明的穿透（《00》：横扫"无视目标的格挡与护盾"、
      *                         处决"不结算护甲与减伤"）。没有卡面通道写它之前，调用方传空集。
-     * @param directionApplicable 这一发的<em>接触</em>是否满足方向条件（背后 120° 之类由调用方
-     *                         从 {@link Facts} 判好交进来）。不成立时卡面给的方向增伤值<em>不进乘区</em>，
-     *                         但留痕会写"未生效"，好让人一眼看出是"没吃到"而不是"没写"。
+     * @param backstabBonus    背刺增伤（小数，卡面值）。
+     * @param backstabApplies  这一发的<em>接触</em>是否落在目标背后扇区里。几何由调用方从
+     *                         {@link Facts} 判好交进来，管线自己不读世界——这样"背后才算"这条
+     *                         判据能在无头环境里被证明。不成立时<em>不加</em>，但留痕写"未生效"。
      * @param crits            这一发暴击<em>几次</em>（{@link CritRules} 算出来的）。
      *                         乘区里用的是 {@code critMultiplier}（已是总系数），这一格只为留痕：
      *                         溢出连暴时"× 暴击 1.69"要能说出是 1.3 乘了两遍。
@@ -101,7 +112,8 @@ public final class AttackPipeline {
                         Map<String, Double> classBonuses, double allDamage, double ownBuff,
                         double specialDamage, double critMultiplier, double directionBonus,
                         boolean capExempted, double flatThisSource, double extraSettlements,
-                        Set<Penetration> penetration, boolean directionApplicable, int crits) {
+                        Set<Penetration> penetration, double backstabBonus, boolean backstabApplies,
+                        int crits) {
 
         public Input {
             classBonuses = new TreeMap<>(classBonuses);
@@ -109,7 +121,7 @@ public final class AttackPipeline {
             crits = Math.max(0, crits);
         }
 
-        /** 不关心方向条件、也不报暴击次数的调用点（纯数值推演、蒙特卡洛）：按"方向已成立"算。 */
+        /** 不带背刺、也不报暴击次数的调用点（纯数值推演、蒙特卡洛）。 */
         public Input(double base, double coefficient, @Nullable String attackClass,
                      Map<String, Double> classBonuses, double allDamage, double ownBuff,
                      double specialDamage, double critMultiplier, double directionBonus,
@@ -117,7 +129,7 @@ public final class AttackPipeline {
                      Set<Penetration> penetration) {
             this(base, coefficient, attackClass, classBonuses, allDamage, ownBuff, specialDamage,
                     critMultiplier, directionBonus, capExempted, flatThisSource, extraSettlements,
-                    penetration, true, critsOf(critMultiplier));
+                    penetration, 0.0, true, critsOf(critMultiplier));
         }
 
         /** 只不报暴击次数的那一个（次数按"乘区不为 1 就是暴击了一次"推）。 */
@@ -125,10 +137,10 @@ public final class AttackPipeline {
                      Map<String, Double> classBonuses, double allDamage, double ownBuff,
                      double specialDamage, double critMultiplier, double directionBonus,
                      boolean capExempted, double flatThisSource, double extraSettlements,
-                     Set<Penetration> penetration, boolean directionApplicable) {
+                     Set<Penetration> penetration, double backstabBonus) {
             this(base, coefficient, attackClass, classBonuses, allDamage, ownBuff, specialDamage,
                     critMultiplier, directionBonus, capExempted, flatThisSource, extraSettlements,
-                    penetration, directionApplicable, critsOf(critMultiplier));
+                    penetration, backstabBonus, true, critsOf(critMultiplier));
         }
 
         private static int critsOf(double critMultiplier) {
@@ -231,18 +243,6 @@ public final class AttackPipeline {
                 "× 暴击 " + input.critMultiplier() + (input.crits() > 1
                         ? "（" + input.crits() + " 次：暴击率超过 100%，溢出部分再暴击）" : ""));
 
-        double direction = input.directionBonus();
-        String directionNote = "× (1+方向增伤 " + direction + ")";
-        if (!input.directionApplicable()) {
-            // 值本来是卡面给的，接触不成立就不进这一格——但要留痕说清是"没吃到"而不是"没写"
-            directionNote = "方向增伤 " + direction + " 未生效（这一发的接触不满足方向条件）";
-            direction = 0.0;
-        } else if (!input.capExempted() && direction > DIRECTION_BONUS_CAP) {
-            directionNote += " 被封顶到 " + DIRECTION_BONUS_CAP + "（卡面未声明超限）";
-            direction = DIRECTION_BONUS_CAP;
-        }
-        value = stepped(traces, Step.DIRECTION, value, value * (1.0 + direction), directionNote);
-
         if (input.flatThisSource() != 0.0) {
             value = stepped(traces, Step.FLAT_THIS_SOURCE, value, value + input.flatThisSource(),
                     "+ 只加本伤害源 " + input.flatThisSource());
@@ -250,6 +250,30 @@ public final class AttackPipeline {
         if (input.extraSettlements() != 0.0) {
             value = stepped(traces, Step.EXTRA_SETTLEMENT, value, value + input.extraSettlements(),
                     "+ 追加结算 " + input.extraSettlements());
+        }
+
+        // —— 最外层加法（《00》"…×（1+专属buff）＋ 方向增伤"）：按<em>基础数值</em>算，不进任何乘区 ——
+        double direction = input.directionBonus();
+        if (direction != 0.0) {
+            String note = "+ 方向增伤 " + direction + " × 基础值";
+            if (!input.capExempted() && direction > DIRECTION_BONUS_CAP) {
+                note = "+ 方向增伤 " + DIRECTION_BONUS_CAP + "（卡面写 " + direction
+                        + "，未声明超限，封顶到 " + DIRECTION_BONUS_CAP + "）× 基础值";
+                direction = DIRECTION_BONUS_CAP;
+            }
+            value = stepped(traces, Step.DIRECTION, value, value + input.base() * direction, note);
+        }
+
+        double backstab = input.backstabBonus();
+        if (backstab != 0.0) {
+            if (!input.backstabApplies()) {
+                // 值本来就是卡面给的，接触不成立就不加——但要留痕说清是"没吃到"而不是"没写"
+                traces.add(new StepTrace(Step.BACKSTAB, value, value,
+                        "背刺增伤 " + backstab + " 未生效（这一发的接触不在目标背后扇区内）"));
+            } else {
+                value = stepped(traces, Step.BACKSTAB, value, value + input.base() * backstab,
+                        "+ 背刺 " + backstab + " × 基础值");
+            }
         }
 
         traces.add(new StepTrace(Step.DELIVER, value, value,

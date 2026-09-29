@@ -52,12 +52,14 @@ import javax.annotation.Nullable;
  * <p><b>接管点叫醒的事件（2026-09-28）</b>：{@code attack}（出手）／{@code hit}（打中）／
  * {@code damage_dealt}（真的造成了伤害）／{@code kill}（打死）／{@code damage_taken}（挨的这一下）／
  * {@code block_success} 与 {@code parry_success}（挡下与精准挡下）／{@code tick}（周期到点，
- * 在 {@code CardCadence} 里）。结算读四条通道：{@code all_damage}、{@code melee_damage}、
- * {@code direction_bonus}、守方 {@code damage_reduction}；六种动作有执行器（{@code lethal_immunity}、
+ * 在 {@code CardCadence} 里）。结算读五条通道：{@code all_damage}、{@code melee_damage}、
+ * {@code direction_bonus}、{@code backstab_bonus}、守方 {@code damage_reduction}，
+ * 加上暴击（{@link CritRules}：面板 5% 起、倍率 130% 起、溢出再暴击，原版跳跃暴击由
+ * {@link #onCriticalHit} 关掉）；六种动作有执行器（{@code lethal_immunity}、
  * {@code stacks}、{@code damage}、{@code knockback}、{@code reflect}、{@code force_parry}）。
- * 暴击、破甲、护盾点数、穿透声明都<em>故意留空</em>——它们的口径（概率从哪来、盾是谁的账、
- * 哪张卡能声明无视）在内容侧那份《02-名词表》与我们的通道表还没对齐（见交付文档 Q5），
- * 我自己发明一份就是第二真相。</p>
+ * 破甲、护盾点数、穿透声明、元素与抗性都<em>故意留空</em>——它们的口径（盾是谁的账、
+ * 哪张卡能声明无视、元素那一族要不要开）在内容侧那份《02-名词表》与我们的通道表还没对齐
+ * （见交付文档 Q5 与《口径对齐·暴击与方向增伤》），我自己发明一份就是第二真相。</p>
  */
 @Mod.EventBusSubscriber(modid = NextCard.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class CardCombat {
@@ -491,8 +493,10 @@ public final class CardCombat {
     /**
      * 攻方的乘区输入；没有攻方快照时给 null（表示这一发不由卡来加成）。
      *
-     * <p>方向增伤是<em>条件乘区</em>：卡面写的那个值只有在"从目标背后 120° 内"这一发才进乘区
-     * （《00》背刺的定义），接触不成立时留痕会写"未生效"，好让人看出是"没吃到"而不是"没写"。</p>
+     * <p>2026-09-30 纠正过一次语义：{@code channel.direction_bonus} 是《00》公式末尾那句
+     * <em>方向卡（火/雷/冰流派）带来的最外层加法</em>，与"从哪个方向打"无关，所以这里<em>不再</em>
+     * 按接触门控它；几何那一族走 {@code channel.backstab_bonus}（《02》"背后 120° 额外一次 30%"），
+     * 由接触决定加不加，接触不成立时管线仍会留一条"未生效"的痕。</p>
      *
      * <p>暴击走 {@link CritRules}：面板 = 5% 基线 + {@code channel.crit_chance}，
      * 倍率 = 130% 基线 + {@code channel.crit_damage}（无上限），超过 100% 的溢出<em>再暴击一次</em>。
@@ -514,13 +518,20 @@ public final class CardCombat {
         double allDamage = attack.channel("all_damage");
         double melee = attack.channel("melee_damage");
         double direction = attack.channel("direction_bonus");
-        boolean directionApplies = contact == null
-                || contact.fromBehind(Predicates.BACK_SECTOR_HALF_ANGLE);
+        double backstab = attack.channel("backstab_bonus");
         int crits = CritRules.critCount(CritRules.chance(attack), critRoll);
         double crit = CritRules.totalMultiplier(CritRules.multiplier(attack), crits);
         return new AttackPipeline.Input(incoming, 1.0, melee > 0 ? "melee" : null,
                 Map.of("melee", melee), allDamage, 0.0, 0.0, crit, direction, false, 0.0, 0.0,
-                AttackPipeline.penetration(), directionApplies, crits);
+                AttackPipeline.penetration(), backstab, backstabHolds(contact), crits);
+    }
+
+    /**
+     * 背刺这一格吃不吃：只有"这一发落在目标背后 120° 扇区内"才算。
+     * 没有接触事实（纯推演）时按"算"处理，与管线里其他接触无关的格子一致。
+     */
+    public static boolean backstabHolds(@Nullable Facts contact) {
+        return contact == null || contact.fromBehind(Predicates.BACK_SECTOR_HALF_ANGLE);
     }
 
     /**

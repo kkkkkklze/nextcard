@@ -86,6 +86,7 @@ public final class Mechanics {
             "armor", "max_health", "max_health_scale", "move_speed", "attack_speed",
             "crit_chance", "crit_damage",
             "all_damage", "physical_damage", "melee_damage", "base_damage", "direction_bonus",
+            "backstab_bonus",
             "armor_pierce", "lifesteal", "resistance", "damage_reduction");
 
     /** 点值通道（卡面写 "+10 护甲值"）；其余通道是比值（卡面写 "+10%"）。 */

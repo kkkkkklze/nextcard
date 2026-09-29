@@ -756,14 +756,15 @@ public class NextCardGameTests {
     }
 
     /**
-     * 接触事实在世界里成立：同一张「双牙」（背后 +30%），正面一刀不吃、背后一刀要吃。
+     * 接触事实在世界里成立：同一张「双牙」（背刺 +30%），正面一刀不吃、背后一刀要吃。
      *
-     * <p>这条是"方向增伤"第一次有世界内证据：之前那个乘区谁都没喂过值，喂了也只能证明
-     * "卡面数字能折进快照"，证不了"引擎知道我从哪一刀砍的"。这里朝向与站位都由手摆，
-     * 所以绿红只可能来自角度换算本身（{@link DamageContact#angleOffFront}）。</p>
+     * <p>这条第一次有世界内证据时，它验的是"方向增伤"；2026-09-30 按《00》《02》纠正之后，
+     * 几何那一格改叫<b>背刺增伤</b>（"方向增伤"归还给方向卡那一族，即火/雷/冰流派，不分角度）。
+     * 卡名与站位都由手摆，所以绿红只可能来自角度换算本身
+     * （{@link DamageContact#angleOffFront}）与那一道接触门。</p>
      */
     @GameTest
-    public void directionBonusNeedsTheActualContact(GameTestHelper helper) {
+    public void backstabNeedsTheActualContact(GameTestHelper helper) {
         CardCombat.resetForTests();
         Player striker = helper.makeMockSurvivalPlayer();
         grant(helper, striker, "twin_fang");
@@ -775,12 +776,12 @@ public class NextCardGameTests {
         double fromBehind = dealtTo(facing(helper, anchor, 0.0F), striker, 10.0F);
 
         helper.assertTrue(Math.abs(fromFront - 10.0) < 1e-3,
-                "正面那一刀不该吃方向加成，实际 " + fromFront + "；留痕 " + CardCombat.lastTrace());
+                "正面那一刀不该吃背刺加成，实际 " + fromFront + "；留痕 " + CardCombat.lastTrace());
         helper.assertTrue(Math.abs(fromBehind - 13.0) < 1e-3,
-                "背后那一刀要吃 +30%，实际 " + fromBehind + "；留痕 " + CardCombat.lastTrace());
-        helper.assertTrue(CardCombat.lastTrace().toString().contains("方向增伤 0.3")
+                "背后那一刀要吃基础值的 +30%，实际 " + fromBehind + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(CardCombat.lastTrace().toString().contains("背刺 0.3")
                         && !CardCombat.lastTrace().toString().contains("未生效"),
-                "背后那次的留痕要写明这一格真的进了乘区: " + CardCombat.lastTrace());
+                "背后那次的留痕要写明这一格真的加了: " + CardCombat.lastTrace());
 
         helper.succeed();
     }

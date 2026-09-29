@@ -66,31 +66,38 @@ public class SettlementTest {
                 new ModifierClause("channel.direction_bonus", 0.2, "", 0.0, List.of())), id -> 0);
         Settlement.Result result = CardCombat.settle(attack, null, null, 100.0);
         assertNotNull(result);
-        assertEquals(360.0, result.value(), 1e-9, "100 ×(1+1) 全伤 ×(1+0.5) 近战 ×(1+0.2) 方向");
+        assertEquals(320.0, result.value(), 1e-9,
+                "100 ×(1+1) 全伤 ×(1+0.5) 近战 = 300，方向增伤是最外层加法：+ 基础值 100 × 0.2 = 320"
+                        + "（2026-09-30 按《00》纠正，原先误当成乘区）");
 
         MechanicProfile defence = MechanicProfile.fold(List.of(
                 new ModifierClause("channel.damage_reduction", 0.25, "", 0.0, List.of())), id -> 0);
         assertEquals(75.0, CardCombat.settle(null, defence, null, 100.0).value(), 1e-9,
                 "守方减伤走的是同一条链的减免段，不是另开一次乘法");
-        assertEquals(270.0, CardCombat.settle(attack, defence, null, 100.0).value(), 1e-9,
-                "两边都在场时先乘后减：360×0.75");
+        assertEquals(240.0, CardCombat.settle(attack, defence, null, 100.0).value(), 1e-9,
+                "两边都在场时先算完攻方再减：320×0.75");
 
         assertNull(CardCombat.settle(null, null, null, 100.0), "谁都没有可生效加成时不该参与结算");
         assertNull(CardCombat.defenceOptionsFor(defenceWithNoReduction(), null), "减伤为 0 且没否决时不该建账");
     }
 
     /**
-     * 方向增伤是<em>条件</em>乘区：卡面写了那个值，接触不成立时也不能白给
-     * （《00》背刺＝"从目标背后 120° 打出的攻击"）。
+     * 背刺增伤是<em>条件</em>加法：卡面写了那个值，接触不成立时也不能白给
+     * （《02》"背刺：背后 120° 攻击额外一次 30%"）。
+     *
+     * <p>2026-09-30 这条从"方向增伤"改挂到"背刺增伤"上：正本里"方向增伤"指的是方向卡
+     * （火/雷/冰流派）带来的最外层加法，与几何无关。两件事必须分开，否则一张写"方向增伤"的
+     * 火系卡会被引擎按"你有没有绕到背后"决定吃不吃。</p>
      */
     @Test
-    public void directionBonusIsGatedByTheActualContact() {
+    public void backstabBonusIsGatedByTheActualContact() {
         MechanicProfile stab = MechanicProfile.fold(List.of(
-                new ModifierClause("channel.direction_bonus", 0.3, "", 0.0, List.of())), id -> 0);
+                new ModifierClause("channel.backstab_bonus", 0.3, "", 0.0, List.of())), id -> 0);
         Facts behind = Facts.builder().angleOffFront(175.0).build();
         Facts inFront = Facts.builder().angleOffFront(10.0).build();
 
-        assertEquals(130.0, CardCombat.settle(stab, behind, null, null, 100.0).value(), 1e-9, "背后 5° 吃到 +30%");
+        assertEquals(130.0, CardCombat.settle(stab, behind, null, null, 100.0).value(), 1e-9,
+                "背后 5°：加基础值的 30%");
         Settlement.Result front = CardCombat.settle(stab, inFront, null, null, 100.0);
         assertEquals(100.0, front.value(), 1e-9, "正面一分不吃");
         assertTrue(front.trace().toString().contains("未生效"),
