@@ -3,6 +3,7 @@ package com.klze.nextcard.gametest;
 import com.klze.nextcard.NextCard;
 import com.klze.nextcard.common.combat.CardCadence;
 import com.klze.nextcard.common.combat.CardCombat;
+import com.klze.nextcard.common.combat.CardDamageSource;
 import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.CardAttributes;
 import com.klze.nextcard.common.player.PlayerCardState;
@@ -197,10 +198,10 @@ public class NextCardGameTests {
      * {@link CardDamageSource} 拦住了（拦不住的话这里不是红，是整条测试炸栈）；
      * ③ 那只同时被推动了，而它从没被直接攻击过 → 击退这条分支也真的落了地。</p>
      *
-     * <p>反过来，<b>直接目标只吃到普通一击</b>：原版无敌帧（{@code invulnerableTime}）会把同一刻
-     * 打到同一只的第二发吃掉，所以冲击波对刚被打中的目标不叠加。这是<em>顺带验实的现行行为</em>，
-     * 不是漏了什么——要改它得给 damage_type 加 BYPASSES_COOLDOWN 标签，那属于玩法决定，
-     * 得内容侧点头才动（见 {@link CardDamageSource} 的注释）。</p>
+     * <p>反过来，<b>直接目标吃到两发</b>：普通一击 + 冲击波那发。2026-09-29 之前这里只会掉一发
+     * （原版无敌帧把同一刻打到同一只的第二发整个吞掉），klze 裁定"本 mod 的所有伤害无视无敌帧"之后，
+     * 自家杀伤类型挂上了 {@code BYPASSES_COOLDOWN} 标签，第二发才真的落下。
+     * 标签本身由 {@code engineDamageIgnoresTheInvulnerabilityWindow} 直接断言。</p>
      */
     @GameTest
     public void shockwaveHitsANeighbourOnceAndDoesNotRecurse(GameTestHelper helper) {
@@ -224,8 +225,9 @@ public class NextCardGameTests {
         helper.assertTrue(neighbourLost > 0.0, "半径 4 格内的邻居也该吃到这一发脉冲，实际 " + neighbourLost);
         helper.assertTrue(neighbourLost < 2.0,
                 "只该吃到一发；吃到 " + neighbourLost + " 说明独立伤害把自己又触发了一次");
-        helper.assertTrue(directLost > 4.0 && directLost < 5.05,
-                "直接目标只吃到普通一击（5 点，被随机护甲削到 " + directLost + "）；脉冲那发被无敌帧吃掉");
+        helper.assertTrue(directLost > 5.0 && directLost < 6.4,
+                "直接目标现在吃到两发（普通一击 5 点 + 脉冲 0.6 点，都被随机护甲削一点，实测 "
+                        + directLost + "）——2026-09-29 起自家伤害绕过无敌帧，不再只吃一发");
         helper.assertTrue(neighbour.getDeltaMovement().horizontalDistanceSqr() > 0.0,
                 "它从没被直接攻击过，被推动只能是击退动作的功劳");
 
@@ -705,6 +707,44 @@ public class NextCardGameTests {
         double plainHit = dealtTo(helper.makeMockSurvivalPlayer(), striker, 10.0F);
         helper.assertTrue(Math.abs(plainHit - 10.0) < 1e-3,
                 "不判定暴击时原样落地（这条同时钉住「原版跳跃暴击没在数值里留下痕迹」），实际 " + plainHit);
+
+        helper.succeed();
+    }
+
+    /**
+     * 自家伤害绕过原版无敌帧（klze 裁定 2026-09-29："让本 mod 的所有伤害无视无敌帧"）。
+     *
+     * <p>两条断言各钉一层，缺一不可：</p>
+     * <ol>
+     *   <li><b>标签真的挂在那条注册表 damage_type 上</b>。这条最容易自欺：代码里
+     *       {@code new Holder.Direct<>(…)} 造出来的杀伤类型，{@code is(TagKey)} <em>永远返回 false</em>
+     *       （{@code Holder.Direct} 里那几个 {@code is} 是硬写死的），所以"我给它加了标签"这种话
+     *       只有查注册表才算数。</li>
+     *   <li><b>行为真的变了</b>：同一 tick 内对同一目标打两发同样大小的数，两发都要落下
+     *       ——原版那条 {@code invulnerableTime > 10 && amount <= lastHurt} 会把第二发整个吞掉。</li>
+     * </ol>
+     */
+    @GameTest
+    public void engineDamageIgnoresTheInvulnerabilityWindow(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        net.minecraft.server.level.ServerLevel level = helper.getLevel();
+        helper.assertTrue(level.registryAccess()
+                        .registryOrThrow(net.minecraft.core.registries.Registries.DAMAGE_TYPE)
+                        .getHolderOrThrow(CardDamageSource.TYPE_KEY)
+                        .is(net.minecraft.tags.DamageTypeTags.BYPASSES_COOLDOWN),
+                "nextcard:card_extra 必须在 bypasses_cooldown 标签里（代码造的 Holder.Direct 挂不上标签）");
+
+        Player striker = helper.makeMockSurvivalPlayer();
+        Player victim = helper.makeMockSurvivalPlayer();
+        ResourceLocation card = new ResourceLocation(NextCard.MODID, "storm_pulse");
+        float before = victim.getHealth();
+        boolean first = victim.hurt(CardDamageSource.of(level, card, striker, "第一发"), 3.0F);
+        boolean second = victim.hurt(CardDamageSource.of(level, card, striker, "第二发"), 3.0F);
+        float lost = before - victim.getHealth();
+
+        helper.assertTrue(first && second, "两发都该被认成打中：" + first + " / " + second);
+        helper.assertTrue(Math.abs(lost - 6.0) < 1e-3,
+                "两发都要落下（3 + 3），实际掉血 " + lost + "（第二发被无敌帧吞了就是 3）");
 
         helper.succeed();
     }

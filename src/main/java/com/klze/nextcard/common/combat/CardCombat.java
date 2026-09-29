@@ -300,7 +300,7 @@ public final class CardCombat {
             if (hit.target() == Triggers.Target.ATTACKER) {
                 // 反弹只还给打我的那位：找不到活体攻击者（箭、火、摔落）就是没对象，不搜半径
                 if (attacker instanceof LivingEntity striker && striker != owner) {
-                    striker.hurt(new CardDamageSource(hit.cardId(), owner, hit.attribution()),
+                    striker.hurt(CardDamageSource.of(owner.level(), hit.cardId(), owner, hit.attribution()),
                             (float) hit.amount());
                 }
                 continue;
@@ -309,7 +309,7 @@ public final class CardCombat {
                 continue;
             }
             for (LivingEntity target : around(owner, directTarget, hit.radius())) {
-                target.hurt(new CardDamageSource(hit.cardId(), owner, hit.attribution()), (float) hit.amount());
+                target.hurt(CardDamageSource.of(owner.level(), hit.cardId(), owner, hit.attribution()), (float) hit.amount());
             }
         }
         for (Triggers.KnockbackHit knock : result.knockbacks()) {
