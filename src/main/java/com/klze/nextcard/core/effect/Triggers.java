@@ -68,6 +68,9 @@ public final class Triggers {
     /** 动作：接下来 N 秒内的格挡一律按精准结算。 */
     public static final String FORCE_PARRY = "force_parry";
 
+    /** 动作：把<em>下一次攻击</em>武装成必定暴击（可再带一条临时暴伤）。 */
+    public static final String CRIT = "crit";
+
     /** 独立伤害打给谁。 */
     public enum Target {
         /** 以持卡人为圆心、按半径找活物（冲击波）。 */
@@ -257,6 +260,12 @@ public final class Triggers {
                             fired.add(new Firing(entry.cardId(), action, reason));
                         }
                     }
+                    case CRIT -> {
+                        String reason = armCrit(holder, entry, action, counters, nowSeconds);
+                        if (reason != null) {
+                            fired.add(new Firing(entry.cardId(), action, reason));
+                        }
+                    }
                     default -> unsupported.add(entry.cardId() + " 的 " + action.type()
                             + "（词表里有，引擎还没有执行器）");
                 }
@@ -416,6 +425,94 @@ public final class Triggers {
         double radius = Math.max(0.0, action.number("radius", 0.0));
         out.add(new KnockbackHit(entry.cardId(), strength, radius, "击退 " + strength));
         return "把目标推开 " + strength + "（半径 " + radius + " 格）";
+    }
+
+    /** 某张卡的"下一次攻击武装"资源名（引擎命名空间内，与 {@link #forceParryResource} 同一种形状）。 */
+    public static String critResource(ResourceLocation cardId) {
+        return COOLDOWN_PREFIX + cardId + "." + CRIT;
+    }
+
+    /**
+     * 兑现 {@code crit}：记一枚"下一次攻击"的在途计数。
+     *
+     * <p>数不记账本，只记"有没有"（上限 1，再兑现一次只是<em>刷新</em>时长）——{@code chance} 与
+     * {@code damage} 的出处始终是那张卡自己声明的那几个字段，两处存同一个数就是第二个真相。
+     * 读它的是 {@link #armedCrit}，消费它的是 {@link #spendArmedCrit}。</p>
+     */
+    private static @Nullable String armCrit(String holder, Bound entry, Action action,
+                                            CounterStore counters, double nowSeconds) {
+        double seconds = action.number("seconds", 0.0);
+        CounterStore.Key key = new CounterStore.Key(holder, critResource(entry.cardId()));
+        counters.gain(key, 1, new CounterStore.Rule(1, seconds, CounterStore.Expiry.REFRESH_ALL), nowSeconds);
+        return "武装下一次攻击：暴击率 +" + rounded(action.number("chance", 1.0))
+                + "、暴伤 +" + rounded(action.number("damage", 0.0))
+                + (seconds > 0.0 ? "，" + rounded(seconds) + " 秒内有效" : "，直到下一次攻击");
+    }
+
+    /**
+     * 有没有武装着的"下一次攻击"、值是多少——<b>只读</b>（先把过期的清掉），不消费。
+     *
+     * <p>读它的人有两个：{@link #spendArmedCrit}（这一发真落地了）与接管点的调试。<em>谁</em>用掉它
+     * 由调用点决定，所以这里绝不顺手扣账。</p>
+     */
+    public static CritRules.Armed armedCrit(String holder, List<Bound> bound, CounterStore counters,
+                                            double nowSeconds) {
+        double chance = 0.0;
+        double damage = 0.0;
+        for (Bound entry : bound) {
+            if (!declaresCrit(entry)) {
+                continue;
+            }
+            CounterStore.Key key = new CounterStore.Key(holder, critResource(entry.cardId()));
+            counters.expire(key, nowSeconds);
+            if (counters.amount(key) <= 0.0) {
+                continue;
+            }
+            // 一张卡只有一枚在途（上限 1），所以同一张卡上写两遍 crit 也只加一遍——
+            // 加两遍就是"同一个数两处记"，那正是本项目一直在消的那类双份结算。
+            chance += critNumber(entry, "chance", 1.0);
+            damage += critNumber(entry, "damage", 0.0);
+        }
+        return chance == 0.0 && damage == 0.0 ? CritRules.Armed.NONE : new CritRules.Armed(chance, damage);
+    }
+
+    /**
+     * 读出并<em>用掉</em>在途的武装。多张卡同时武装就各自加一遍——这是"临时 Buff 叠进面板"，
+     * 不是新机制。
+     *
+     * <p>调用时机是"这一发已经进了结算"（见 {@code CardCombat#onLivingDamage}）：被盾完全挡下的那发
+     * 走不到结算，武装保留；{@code CardDamageSource} 那种自家补出去的发<em>不算</em>"我的下一次攻击"，
+     * 否则一次弹反就会把玩家攒着的必暴吃掉。</p>
+     */
+    public static CritRules.Armed spendArmedCrit(String holder, List<Bound> bound, CounterStore counters,
+                                                 double nowSeconds) {
+        CritRules.Armed armed = armedCrit(holder, bound, counters, nowSeconds);
+        for (Bound entry : bound) {
+            if (declaresCrit(entry)) {
+                counters.spend(new CounterStore.Key(holder, critResource(entry.cardId())), 1.0);
+            }
+        }
+        return armed;
+    }
+
+    /** 这个子句里有没有 {@code crit} 那一项。 */
+    private static boolean declaresCrit(Bound entry) {
+        for (Action action : entry.clause().actions()) {
+            if (CRIT.equals(action.type())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 这张卡声明的那个武装数值（取它第一个 {@code crit} 动作——账只有一枚，数值也只认第一份）。 */
+    private static double critNumber(Bound entry, String field, double fallback) {
+        for (Action action : entry.clause().actions()) {
+            if (CRIT.equals(action.type())) {
+                return action.number(field, fallback);
+            }
+        }
+        return fallback;
     }
 
     private static String basisText(String basis) {

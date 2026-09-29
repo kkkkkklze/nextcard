@@ -16,7 +16,7 @@ import java.util.Set;
  *   "on": "parry_success",                              // 必须是已注册事件（Mechanics.slot）
  *   "window": { "seconds": 3.0, "uses": 1 },             // 缺省 = 瞬时执行；uses 缺省 = 不限次数
  *   "when": [ { "hp_below": 0.3 } ],                     // 全部成立才触发
- *   "actions": [ { "crit": { "guaranteed": true } } ] }
+ *   "actions": [ { "crit": { "seconds": 3.0 } } ] }        // 一次性武装：下一次攻击必暴
  *
  * { "type": "trigger",
  *   "on": "charge_release", "at": 2.0, "inherits": true,  // 蓄力点（仅 charge_release 可绑）

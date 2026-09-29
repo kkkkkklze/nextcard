@@ -33,7 +33,7 @@ public record Action(String type, JsonObject body) {
         keys.put("reflect", Set.of("ratio", "basis"));
         keys.put("extra_resolve", Set.of("count", "unbounded", "radius"));
         keys.put("copy_attack", Set.of("radius"));
-        keys.put("crit", Set.of("guaranteed", "chance", "damage"));
+        keys.put("crit", Set.of("chance", "damage", "seconds"));
         keys.put("lethal_immunity", Set.of("uses", "cooldown"));
         keys.put("force_parry", Set.of("seconds"));
         keys.put("ignore_armor", Set.of("ratio"));
@@ -100,8 +100,29 @@ public record Action(String type, JsonObject body) {
                 return null;
             }
         }
+        if (type.equals("crit")) {
+            for (String field : CRIT_AMOUNTS) {
+                if (!body.has(field)) {
+                    continue;
+                }
+                JsonElement value = body.get(field);
+                // 三个量都是"往上加"或"活多久"，负数没有语义；夹成 0 等于"写了个负数却没反应"。
+                // 带引号的数字同样拒——那是手改 JSON 最常见的一种错。
+                if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
+                    errors.add("action crit field " + field + " must be a number, got " + value);
+                    return null;
+                }
+                if (value.getAsDouble() < 0.0) {
+                    errors.add("action crit field " + field + " must not be negative, got " + value);
+                    return null;
+                }
+            }
+        }
         return new Action(type, body);
     }
+
+    /** {@code crit} 里那几个必须是"非负数"的字段。 */
+    private static final Set<String> CRIT_AMOUNTS = Set.of("chance", "damage", "seconds");
 
     /**
      * {@code damage} 允许的基数。写错基数不能"按 0 算"——那会让一张卡看起来完全没伤害，

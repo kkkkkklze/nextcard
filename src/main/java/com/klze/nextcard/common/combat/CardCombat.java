@@ -155,10 +155,18 @@ public final class CardCombat {
 
         Triggers.Result onTaken = fire(defender, defenceView, Triggers.DAMAGE_TAKEN,
                 basesOf(defender, incoming));
+        // "下一次攻击"的武装在<em>这一发进结算</em>的时候用掉。两个边界要说明：被盾完全挡下的那发
+        // 根本走不到这里，所以武装保留（"挡下了就不算我打过"，与 {@code hit} 同一口径）；
+        // 自家补出去的那一发<em>不算</em>"我的下一次攻击"，否则一次弹反就把玩家攒着的必暴吃掉了。
+        CritRules.Armed armed = attacker == null || CardDamageSource.isEngineExtra(damageSource)
+                ? CritRules.Armed.NONE
+                : Triggers.spendArmedCrit(attacker.holder(), attacker.triggers(), HOST.counters(),
+                        attacker.nowSeconds());
         // 暴击那一次随机数从世界的随机源取（原版跳跃暴击已经被 onCriticalHit 关掉，
         // 所以这里是唯一的暴击来源，不会与原版叠成双暴击）
         Settlement.Result result = settle(attacker == null ? null : attacker.profile(), attackView,
-                defender == null ? null : defender.profile(), onTaken.vetoReason(), incoming, critRoll(victim));
+                defender == null ? null : defender.profile(), onTaken.vetoReason(), incoming,
+                critRoll(victim), armed);
         if (result != null) {
             event.setAmount((float) result.value());
             pipelineRuns++;
@@ -507,7 +515,15 @@ public final class CardCombat {
     public static Settlement.Result settle(@Nullable MechanicProfile attack, @Nullable Facts contact,
                                            @Nullable MechanicProfile defence, @Nullable String vetoReason,
                                            double incoming, double critRoll) {
-        AttackPipeline.Input input = attackInputFor(attack, incoming, contact, critRoll);
+        return settle(attack, contact, defence, vetoReason, incoming, critRoll, CritRules.Armed.NONE);
+    }
+
+    /** 同一条链，再加"下一次攻击"那一格一次性武装（世界内走这条）。 */
+    @Nullable
+    public static Settlement.Result settle(@Nullable MechanicProfile attack, @Nullable Facts contact,
+                                           @Nullable MechanicProfile defence, @Nullable String vetoReason,
+                                           double incoming, double critRoll, CritRules.Armed armed) {
+        AttackPipeline.Input input = attackInputFor(attack, incoming, contact, critRoll, armed);
         DefencePipeline.Options options = defenceOptionsFor(defence, vetoReason);
         if (input == null && options == null) {
             return null;
@@ -543,10 +559,24 @@ public final class CardCombat {
         return attackInputFor(attack, incoming, contact, NEVER_CRITS);
     }
 
-    /** 带暴击 roll 的那一条（世界内走这条；纯推演那条默认不暴击）。 */
+    /** 带暴击 roll、但<em>没有</em>一次性武装的那一条（纯推演与既有断言走这条）。 */
     @Nullable
     public static AttackPipeline.Input attackInputFor(@Nullable MechanicProfile attack, double incoming,
                                                       @Nullable Facts contact, double critRoll) {
+        return attackInputFor(attack, incoming, contact, critRoll, CritRules.Armed.NONE);
+    }
+
+    /**
+     * 再带上<em>一次性武装</em>那一格（"下一次攻击必定暴击"那类）。
+     *
+     * <p>武装是<em>加进面板</em>的：+100% 与基线 5% 相加得 105%，按 {@link CritRules} 那条溢出规则
+     * 就是"必定一次 + 5% 再来一次"。这里不特殊处理"武装了就一定只暴一次"，因为那会让裁定里
+     * 两条规则互相打架。</p>
+     */
+    @Nullable
+    public static AttackPipeline.Input attackInputFor(@Nullable MechanicProfile attack, double incoming,
+                                                      @Nullable Facts contact, double critRoll,
+                                                      CritRules.Armed armed) {
         if (attack == null) {
             return null;
         }
@@ -554,8 +584,8 @@ public final class CardCombat {
         double melee = attack.channel("melee_damage");
         double direction = attack.channel("direction_bonus");
         double backstab = attack.channel("backstab_bonus");
-        int crits = CritRules.critCount(CritRules.chance(attack), critRoll);
-        double crit = CritRules.totalMultiplier(CritRules.multiplier(attack), crits);
+        int crits = CritRules.critCount(CritRules.chance(attack, armed), critRoll);
+        double crit = CritRules.totalMultiplier(CritRules.multiplier(attack, armed), crits);
         return new AttackPipeline.Input(incoming, 1.0, melee > 0 ? "melee" : null,
                 Map.of("melee", melee), allDamage, 0.0, 0.0, crit, direction, false, 0.0, 0.0,
                 AttackPipeline.penetration(), backstab, backstabHolds(contact), crits);

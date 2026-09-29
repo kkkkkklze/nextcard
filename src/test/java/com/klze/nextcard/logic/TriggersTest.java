@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.klze.nextcard.core.card.CardIndex;
 import com.klze.nextcard.core.effect.CounterStore;
+import com.klze.nextcard.core.effect.CritRules;
 import com.klze.nextcard.core.effect.EffectHost;
 import com.klze.nextcard.core.effect.Facts;
 import com.klze.nextcard.core.effect.MechanicProfile;
@@ -360,6 +361,46 @@ public class TriggersTest {
     }
 
     /** 引擎命名空间是预留的：内容用 {@code trigger.} 开叠层会把冷却与资源记在同一本账上。 */
+    /**
+     * "下一次攻击"的武装（klze 2026-09-30）：与强制精准同一形状——一枚在途计数、按时长过期、
+     * 上限 1；但它是<em>被消费</em>掉的，不是到点才算用完。
+     *
+     * <p>三条各自会红的判据：只读不消费（{@link Triggers#armedCrit}）、消费一次就撒手
+     * （{@link Triggers#spendArmedCrit}）、同一张卡上写两遍也只加一遍。第三条盯的是
+     * "数值两处记"那一类：账本里只有一枚，加两遍就等于凭空多 100%。</p>
+     */
+    @Test
+    public void armedCritIsReadSpentAndNeverDoubleCounted() {
+        CounterStore counters = new CounterStore();
+        List<Triggers.Bound> riposte = List.of(bound("ash_guard", "{\"type\":\"trigger\","
+                + " \"on\":\"damage_taken\",\"actions\":[{\"crit\":{\"seconds\":3.0,\"damage\":0.3}}]}"));
+
+        assertEquals(CritRules.Armed.NONE, Triggers.armedCrit(HOLDER, riposte, counters, 0.0),
+                "还没挨打就没有武装");
+        fire(Triggers.DAMAGE_TAKEN, Facts.NONE, riposte, counters, Map.of(), null, 0.0);
+
+        CritRules.Armed armed = Triggers.armedCrit(HOLDER, riposte, counters, 0.5);
+        assertEquals(1.0, armed.chance(), 1e-9, "chance 不写就是那个 100% 暴击率效果");
+        assertEquals(0.3, armed.damage(), 1e-9);
+        assertEquals(armed, Triggers.armedCrit(HOLDER, riposte, counters, 0.6), "只读不消费：再读还是同一份");
+
+        assertEquals(CritRules.Armed.NONE, Triggers.armedCrit(HOLDER, riposte, counters, 3.1),
+                "3 秒内没攻击就过期了");
+
+        fire(Triggers.DAMAGE_TAKEN, Facts.NONE, riposte, counters, Map.of(), null, 4.0);
+        assertEquals(1.0, Triggers.spendArmedCrit(HOLDER, riposte, counters, 4.0).chance(), 1e-9,
+                "这一发落地，武装用掉");
+        assertEquals(CritRules.Armed.NONE, Triggers.spendArmedCrit(HOLDER, riposte, counters, 4.0),
+                "一次性：下一次攻击就没有了");
+
+        List<Triggers.Bound> twice = List.of(bound("greedy", "{\"type\":\"trigger\","
+                + " \"on\":\"damage_taken\",\"actions\":[{\"crit\":{\"seconds\":5}},"
+                + " {\"crit\":{\"seconds\":5}}]}"));
+        fire(Triggers.DAMAGE_TAKEN, Facts.NONE, twice, counters, Map.of(), null, 10.0);
+        assertEquals(1.0, Triggers.armedCrit(HOLDER, twice, counters, 10.0).chance(), 1e-9,
+                "同一张卡写两遍也只加一遍（账上只有一枚）");
+    }
+
     @Test
     public void theEngineNamespaceGateFailsOnTheRealLoadPath() {
         assertTrue(Triggers.isReservedStackId(Triggers.COOLDOWN_PREFIX + "last_stand"));

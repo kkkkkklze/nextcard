@@ -878,6 +878,69 @@ public class NextCardGameTests {
         helper.succeed();
     }
 
+    /**
+     * 「下一次攻击」那条一次性武装（klze 2026-09-30："给个攻击就消失的 100% 暴击率效果就行"）
+     * 在世界里走完整个生命周期：挨一发 → 武装 → 下一刀必暴 → 再一刀回到没武装的数。
+     *
+     * <p>示例卡是「灰守」（{@code ash_guard}，{@code damage_taken} 上挂 {@code crit}）——引擎侧
+     * 没有一句按卡名的特例，这条链全靠词表走。三段各钉一件事：</p>
+     * <ol>
+     *   <li>roll 钉在 0.5：<em>没武装时这个数绝不暴</em>（面板只有 5% 基线），武装之后同一发 roll
+     *       吃到"必定那一次"。所以绿红只可能来自武装本身，不来自运气。</li>
+     *   <li>用完就没了：紧跟的第二刀回到 10，证明它是"下一次"而不是"接下来所有的"。</li>
+     *   <li>被盾<em>完全挡下</em>的那发不算一次攻击：那一发根本走不到结算，所以武装保留。</li>
+     * </ol>
+     */
+    @GameTest
+    public void anArmedCritBurnsOnTheNextLandedSwing(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        CardCombat.pinCritRoll(0.5);   // 面板 5%：没武装时这个 roll 一定不暴
+        Player riposte = helper.makeMockSurvivalPlayer();
+        grant(helper, riposte, "ash_guard");
+        net.minecraft.world.phys.Vec3 anchor = helper.absoluteVec(new net.minecraft.world.phys.Vec3(0.5, 1.0, 0.5));
+        place(riposte, anchor);
+
+        // 每个数都打在一个<em>全新的</em>靶子上：上一发已经把靶子打到 10 血的话，这一发的 13 点
+        // 会被"扣到 0 就停"夹成 10，测出来的就不是结算本身（这条实测踩过一次）。
+        double plain = dealtTo(helper.makeMockSurvivalPlayer(), riposte, 10.0F);
+        helper.assertTrue(Math.abs(plain - 10.0) < 1e-3, "前提：没挨打就没有武装，实际 " + plain);
+
+        dealtTo(riposte, helper.makeMockSurvivalPlayer(), 3.0F);
+        double armed = dealtTo(helper.makeMockSurvivalPlayer(), riposte, 10.0F);
+        helper.assertTrue(Math.abs(armed - 13.0) < 1e-3,
+                "挨过一发之后的那一刀要必暴（10 × 1.3），实际 " + armed + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(CardCombat.lastTrace().toString().contains("× 暴击 1.3"),
+                "留痕要指到暴击那一格：" + CardCombat.lastTrace());
+
+        double spent = dealtTo(helper.makeMockSurvivalPlayer(), riposte, 10.0F);
+        helper.assertTrue(Math.abs(spent - 10.0) < 1e-3,
+                "一次性：第二刀回到没武装的数，实际 " + spent);
+
+        // 被盾完全挡下的那一发没进结算，所以不该把武装用掉
+        dealtTo(riposte, helper.makeMockSurvivalPlayer(), 3.0F);
+        Player blocker = helper.makeMockSurvivalPlayer();
+        blocker.setItemSlot(net.minecraft.world.entity.EquipmentSlot.OFFHAND,
+                new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.SHIELD));
+        place(blocker, anchor);
+        blocker.setYRot(0.0F);
+        blocker.yHeadRot = 0.0F;   // 朝 +Z：那一边站的就是正面，原版只在正面取消伤害
+        place(riposte, anchor.add(0.0, 0.0, 2.0));
+        blocker.startUsingItem(net.minecraft.world.InteractionHand.OFF_HAND);
+        for (int i = 0; i < 6; i++) {
+            blocker.tick();
+        }
+        helper.assertTrue(blocker.isBlocking(), "前提：举盾 6 tick 后原版应当认他在挡");
+        double blockedFlat = dealtTo(blocker, riposte, 10.0F);
+        helper.assertTrue(Math.abs(blockedFlat) < 1e-3,
+                "前提：这一发被整个挡下（不掉血），实际 " + blockedFlat);
+
+        double stillArmed = dealtTo(helper.makeMockSurvivalPlayer(), riposte, 10.0F);
+        helper.assertTrue(Math.abs(stillArmed - 13.0) < 1e-3,
+                "完全挡下的那发没进结算，所以不该把武装用掉，实际 " + stillArmed);
+
+        helper.succeed();
+    }
+
     /** 摆一个朝指定朝向的受害者（yaw 0 = 朝 +Z，所以 +Z 那边站的人就是正面）。 */
     private static Player facing(GameTestHelper helper, net.minecraft.world.phys.Vec3 at, float yaw) {
         Player victim = helper.makeMockSurvivalPlayer();

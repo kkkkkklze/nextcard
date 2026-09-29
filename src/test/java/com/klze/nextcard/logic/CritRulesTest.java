@@ -98,4 +98,38 @@ public class CritRulesTest {
         assertNotNull(result);
         assertEquals(100.0, result.value(), 1e-9, "纯推演那条默认不暴击");
     }
+
+    /**
+     * 一次性武装（"下一次攻击必定暴击"，klze 2026-09-30）是<em>加进面板</em>的那一格，不是替换面板：
+     * +100% 与基线 5% 相加得 105%，于是那条溢出规则照旧生效——"必定一次 + 5% 再来一次"。
+     *
+     * <p>为什么专门断言"那 5% 还活着"：最容易写错的实现是把武装做成"直接令 crits = 1"，那样面板上的
+     * 暴伤词条与溢出规则会同时失效，而表现是"必暴的那一发反而没那么痛"，玩家看不出问题。</p>
+     */
+    @Test
+    public void anArmedCritJoinsThePanelInsteadOfReplacingIt() {
+        CritRules.Armed armed = new CritRules.Armed(1.0, 0.0);
+        assertEquals(1.05, CritRules.chance(null, armed), 1e-9, "基线 5% + 武装 100%");
+        assertEquals(1, CritRules.critCount(CritRules.chance(null, armed), 0.36),
+                "概率那次没中，必定那次照暴");
+        assertEquals(2, CritRules.critCount(CritRules.chance(null, armed), 0.04),
+                "面板那 5% 的溢出不能因为武装就失效");
+        assertEquals(0, CritRules.critCount(CritRules.chance(null, armed), CritRules.NO_ROLL),
+                "不判定这一格时武装也不该造出暴击（纯推演的口径不变）");
+
+        assertEquals(1.7, CritRules.multiplier(critChannels(0.0, 0.1), new CritRules.Armed(0.0, 0.3)), 1e-9,
+                "暴伤 130% + 面板 10% + 武装 30%");
+
+        AttackPipeline.Input unarmed = CardCombat.attackInputFor(critChannels(0.0, 0.0), 100.0, null, 0.36);
+        assertNotNull(unarmed);
+        assertEquals(0, unarmed.crits(), "同一个 roll 在没武装时不该暴");
+        AttackPipeline.Input armedHit = CardCombat.attackInputFor(critChannels(0.0, 0.0), 100.0, null,
+                0.36, armed);
+        assertNotNull(armedHit);
+        assertEquals(1, armedHit.crits(), "武装之后同一个 roll 必暴一次");
+        Settlement.Result result = CardCombat.settle(critChannels(0.0, 0.0), null, null, null, 100.0, 0.36,
+                armed);
+        assertNotNull(result);
+        assertEquals(130.0, result.value(), 1e-9, "100 × 1.3");
+    }
 }

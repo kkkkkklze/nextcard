@@ -176,6 +176,14 @@ public class ParryChargeVocabularyTest {
         assertError(parse("[{\"type\": \"trigger\", \"on\": \"parry_success\","
                 + " \"actions\": [{\"stun\": {\"seconds\": 1, \"meters\": 2}}]}]"),
                 "unknown key meters");
+        // crit 的三个数都是"往上加"或"活多久"：旧词表里那个 guaranteed 是同义双写，已经收掉；
+        // 负数与带引号的数字都没有语义，必须报错而不是夹成 0（夹了就是"写了却没反应"）
+        assertError(parse("[{\"type\": \"trigger\", \"on\": \"hit\","
+                + " \"actions\": [{\"crit\": {\"guaranteed\": true}}]}]"), "unknown key guaranteed");
+        assertError(parse("[{\"type\": \"trigger\", \"on\": \"hit\","
+                + " \"actions\": [{\"crit\": {\"chance\": -1}}]}]"), "must not be negative");
+        assertError(parse("[{\"type\": \"trigger\", \"on\": \"hit\","
+                + " \"actions\": [{\"crit\": {\"seconds\": \"3\"}}]}]"), "must be a number");
         assertError(parse("[{\"type\": \"trigger\", \"on\": \"block_success\", \"at\": 2.0,"
                 + " \"actions\": [{\"stun\": {\"seconds\": 1}}]}]"), "at is only valid on charge_release");
         assertError(parse("[{\"type\": \"mechanic_modifier\", \"target\": \"window.girth\", \"value\": 1}]"),
@@ -256,7 +264,7 @@ public class ParryChargeVocabularyTest {
                 + "{\"type\": \"mechanic_modifier\", \"target\": \"window.length\", \"value\": 0.3},"
                 + "{\"type\": \"trigger\", \"on\": \"parry_success\","
                 + " \"window\": {\"seconds\": 3.0, \"uses\": 1},"
-                + " \"actions\": [{\"crit\": {\"guaranteed\": true}}]},"
+                + " \"actions\": [{\"crit\": {\"seconds\": 3.0}}]},"
                 + "{\"type\": \"stacks\", \"id\": \"barrier\", \"cap\": 3, \"duration\": 6.0,"
                 + " \"gain\": [{\"on\": \"block_success\", \"amount\": 1}],"
                 + " \"per_stack\": [{\"target\": \"channel.damage_reduction\", \"value\": 0.03}]}]").value();

@@ -41,15 +41,40 @@ public final class CritRules {
     private CritRules() {
     }
 
+    /**
+     * 一次性<em>武装</em>："下一次攻击"临时加的那两格（klze 2026-09-30 裁定："下一次攻击可以视为
+     * 有条件的临时 Buff，给个攻击就消失的 100% 暴击率效果就行"）。
+     *
+     * <p>它<em>进面板</em>而不是替换面板：一条 "+100% 暴击率" 与面板 5% 相加就是 105%，
+     * 于是按本类那条溢出规则得到"必定一次 + 5% 再来一次"。这是裁定里两条规则本来该有的交集，
+     * 不是额外发明的机制。</p>
+     *
+     * @param chance 加进暴击率的量（{@code 1.0} = 用户口中那个"100% 暴击率效果"）
+     * @param damage 加进<em>单次</em>暴击倍率的量（0.3 = 暴伤从 130% 变 160%）
+     */
+    public record Armed(double chance, double damage) {
+        public static final Armed NONE = new Armed(0.0, 0.0);
+    }
+
     /** 面板暴击率（基线 + 卡面增量；负增量最多把面板压到 0）。 */
     public static double chance(@Nullable MechanicProfile profile) {
-        double bonus = profile == null ? 0.0 : profile.channel("crit_chance");
-        return Math.max(0.0, BASE_CHANCE + bonus);
+        return chance(profile, Armed.NONE);
+    }
+
+    /** 面板暴击率 + 一次性武装那一条（可以 &gt; 1，溢出按本类那条规则变成多次暴击）。 */
+    public static double chance(@Nullable MechanicProfile profile, Armed armed) {
+        return Math.max(0.0, BASE_CHANCE + (profile == null ? 0.0 : profile.channel("crit_chance"))
+                + armed.chance());
     }
 
     /** 单次暴击的倍率（基线 1.3 + 卡面 {@code crit_damage} 增量，<b>无上限</b>，下限 0）。 */
     public static double multiplier(@Nullable MechanicProfile profile) {
-        double bonus = profile == null ? 0.0 : profile.channel("crit_damage");
+        return multiplier(profile, Armed.NONE);
+    }
+
+    /** 同上，加上一次性武装那一条暴伤。 */
+    public static double multiplier(@Nullable MechanicProfile profile, Armed armed) {
+        double bonus = (profile == null ? 0.0 : profile.channel("crit_damage")) + armed.damage();
         return Math.max(0.0, BASE_MULTIPLIER + bonus);
     }
 

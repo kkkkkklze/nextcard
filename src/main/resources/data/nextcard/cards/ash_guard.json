@@ -9,6 +9,17 @@
       "type": "mechanic_modifier",
       "target": "channel.damage_reduction",
       "value": 0.4
+    },
+    {
+      "type": "trigger",
+      "on": "damage_taken",
+      "actions": [
+        {
+          "crit": {
+            "seconds": 3.0
+          }
+        }
+      ]
     }
   ],
   "name": "card.nextcard.ash_guard",
