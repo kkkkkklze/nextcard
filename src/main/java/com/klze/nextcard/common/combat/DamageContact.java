@@ -1,5 +1,6 @@
 package com.klze.nextcard.common.combat;
 
+import com.klze.nextcard.common.player.PlayerStillness;
 import com.klze.nextcard.core.effect.Facts;
 import com.klze.nextcard.core.effect.Triggers;
 import net.minecraft.util.Mth;
@@ -19,6 +20,10 @@ import javax.annotation.Nullable;
  * <p><b>拿不到的留默认值，不猜</b>：发声量（要潜行/噪声系统）、"刚从视野外出现"与
  * "被吸引 / 被控制"（要索敌与控制状态系统）、精英/boss 归类（要内容侧标记）今天都没有世界侧来源，
  * 所以这些条件在世界里恒不成立。恒不成立是安全方向——只会让卡"没触发"，不会让它"错触发"。</p>
+ *
+ * <p>{@code moving} 与 {@code still_seconds} 由 {@code PlayerStillness} 的位置采样供数（2026-09-28），
+ * 只在 {@code self} 是玩家时读得到——判定本来就只为持卡人跑（{@code CardCombat.stateOf} 对非玩家
+ * 一律给 null），所以"怪作为 self"的那一份事实从来不会被消费。</p>
  *
  * <p><b>没有对面的那些事件（{@code tick}、以及伤害来自非活体的 {@code damage_taken}）里，
  * {@code target_kind} 会读到 {@code normal}、对面血量读到满格</b>。这不是"引擎认定它是普通怪"，
@@ -96,14 +101,20 @@ public final class DamageContact {
                 .targetKind(kindOf(other));
         if (self != null) {
             builder.attackerHp(self.getHealth() / Math.max(1.0e-6, self.getMaxHealth()));
-            if (self.onGround() && self.getDeltaMovement().horizontalDistanceSqr() > 1.0e-4) {
-                builder.with("moving");
-            }
             if (self.isCrouching()) {
                 builder.with("sneaking");
             }
-            if (self instanceof Player player && player.isBlocking()) {
-                builder.with("blocking");
+            if (self instanceof Player player) {
+                // moving 与 still_seconds 必须同源：两者都从 PlayerStillness 的位置采样里出来
+                // （算法与"为什么不能用速度算"见 core/effect/Stillness）。用velocity 算 moving、
+                // 用位移算时长，会出现"在漂但速度为 0"这种让 {"still_seconds": n} 自相矛盾的瞬间。
+                if (PlayerStillness.moving(player)) {
+                    builder.with("moving");
+                }
+                builder.stillSeconds(PlayerStillness.stillSeconds(player));
+                if (player.isBlocking()) {
+                    builder.with("blocking");
+                }
             }
         }
         if (other != null) {

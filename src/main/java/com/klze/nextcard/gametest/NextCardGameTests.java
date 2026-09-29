@@ -6,6 +6,7 @@ import com.klze.nextcard.common.combat.CardCombat;
 import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.CardAttributes;
 import com.klze.nextcard.common.player.PlayerCardState;
+import com.klze.nextcard.common.player.PlayerStillness;
 import com.klze.nextcard.core.effect.ParryTiming;
 import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.player.CardLedger;
@@ -595,6 +596,62 @@ public class NextCardGameTests {
                 "第二次真伤害就该有回声——计数把这一次算进去了");
 
         helper.succeed();
+    }
+
+    /**
+     * 静止时长在世界里是真的按"位置有没有变"数的，而且一动就归零。
+     *
+     * <p>「凤凰吐息」写的是 {@code on: hit, when: [{still_seconds: 1.0}]}（站定一秒后打出的那一下
+     * 攒一层「蓄燃」）。三段各钉一件事：</p>
+     * <ol>
+     *   <li><b>还没采过样 = 0 秒</b>，不是"已经站了很久"——默认值只会让卡不触发；</li>
+     *   <li><b>站着等够 25 tick（1.25 秒）</b>再打，才攒到那一层（这一步走真 tick，
+     *       因为时长用的是世界时刻，假玩家不会自己 tick）；</li>
+     *   <li><b>挪开三个方块再打</b>：层数不涨，而且 {@code moving} 当场为真——这钉的是
+     *       "动了就没有时长可言"这条同源关系（早先 {@code moving} 由速度算、时长没人算，两者会矛盾）。</li>
+     * </ol>
+     */
+    @GameTest
+    public void stillnessIsMeasuredFromRealMovement(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        PlayerStillness.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "phoenix_breath");
+        Player victim = helper.makeMockSurvivalPlayer();
+        String holder = striker.getUUID().toString();
+        net.minecraft.world.phys.Vec3 at = helper.absoluteVec(new net.minecraft.world.phys.Vec3(0.5, 1.0, 0.5));
+        striker.setPos(at.x, at.y, at.z);
+
+        swing(striker, victim);
+        helper.assertTrue(PlayerStillness.trackedPlayers() == 0,
+                "没人 tick 过就不该有采样（读操作不写状态）");
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "kindled") == 0.0,
+                "第一眼不该算已经站满一秒");
+
+        striker.tick();   // 采一帧：起点 = 这一刻的世界时刻
+        helper.assertTrue(PlayerStillness.stillSeconds(striker) < 0.1,
+                "刚采样完的时长必须接近 0");
+
+        helper.runAfterDelay(25, () -> {
+            double stood = PlayerStillness.stillSeconds(striker);
+            helper.assertTrue(stood >= 1.0, "站了 25 tick 该读到 ≥ 1 秒，实际 " + stood);
+            helper.assertTrue(!PlayerStillness.moving(striker),
+                    "站着的时候不该判成在动");
+            swing(striker, victim);
+            helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "kindled") == 1.0,
+                    "站定那一秒之后打出的那一下才该攒「蓄燃」");
+
+            striker.setPos(at.x + 3.0, at.y, at.z);
+            helper.assertTrue(PlayerStillness.moving(striker),
+                    "位置变了就该当场判成在动");
+            helper.assertTrue(PlayerStillness.stillSeconds(striker) == 0.0,
+                    "动了之后时长归零");
+            swing(striker, victim);
+            helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "kindled") == 1.0,
+                    "挪开之后打的那一下不该再攒层");
+
+            helper.succeed();
+        });
     }
 
     /** 把卡记进玩家的卡账（卡账是真源，宿主由 {@code CardCombat} 在结算时同步）。 */

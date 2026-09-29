@@ -12,6 +12,37 @@
       "cap": 3
     },
     {
+      "type": "stacks",
+      "id": "kindled",
+      "cap": 4,
+      "duration": 6
+    },
+    {
+      "type": "trigger",
+      "on": "hit",
+      "when": [
+        {
+          "still_seconds": 1.0
+        }
+      ],
+      "actions": [
+        {
+          "stacks": {
+            "id": "kindled",
+            "amount": 1
+          }
+        }
+      ]
+    },
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.melee_damage",
+      "source": {
+        "counter": "kindled",
+        "per_layer": 0.06
+      }
+    },
+    {
       "type": "trigger",
       "on": "tick",
       "every": 2.0,
