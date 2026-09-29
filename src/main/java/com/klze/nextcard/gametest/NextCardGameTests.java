@@ -7,6 +7,8 @@ import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.CardAttributes;
 import com.klze.nextcard.common.player.PlayerCardState;
 import com.klze.nextcard.common.player.PlayerStillness;
+import com.klze.nextcard.core.effect.AttackPipeline;
+import com.klze.nextcard.core.effect.CritRules;
 import com.klze.nextcard.core.effect.ParryTiming;
 import com.klze.nextcard.core.effect.Triggers;
 import com.klze.nextcard.core.player.CardLedger;
@@ -652,6 +654,59 @@ public class NextCardGameTests {
 
             helper.succeed();
         });
+    }
+
+    /**
+     * 暴击在世界里成立，而且<em>原版那一格被关掉了</em>。
+     *
+     * <p>三段各钉一件事：① 卡面的 {@code channel.crit_chance}/{@code crit_damage} 真的折进快照，
+     * 面板 = 5% 基线 + 卡面增量、倍率 = 130% 基线 + 卡面增量；② 我们订阅的
+     * {@code CriticalHitEvent} 把原版跳跃暴击判成 {@code DENY}——不关的话一记空中暴击会变成
+     * "原版 1.5 × 我们 1.3"，同一个乘区生效两遍；③ 同一个快照喂进乘区，roll 交进来时
+     * 得到的就是那条链的数（世界里的随机数来自 {@code level.random}，所以这里注入而不是等运气）。</p>
+     */
+    @GameTest
+    public void critComesFromTheEngineNotFromTheJump(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "venom_edge");
+        CardCombat.State state = CardCombat.stateOf(striker);
+        helper.assertTrue(state != null && state.profile() != null, "示例卡的通道要折进快照");
+
+        helper.assertTrue(Math.abs(CritRules.chance(state.profile()) - 0.10) < 1e-9,
+                "面板暴击率 = 5% 基线 + 卡面 5%，实际 " + CritRules.chance(state.profile()));
+        helper.assertTrue(Math.abs(CritRules.multiplier(state.profile()) - 1.4) < 1e-9,
+                "暴伤倍率 = 130% 基线 + 卡面 10%，实际 " + CritRules.multiplier(state.profile()));
+
+        net.minecraftforge.event.entity.player.CriticalHitEvent vanillaCrit =
+                new net.minecraftforge.event.entity.player.CriticalHitEvent(striker,
+                        helper.makeMockSurvivalPlayer(), 1.5F, true);
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(vanillaCrit);
+        helper.assertTrue(vanillaCrit.getResult() == net.minecraftforge.eventbus.api.Event.Result.DENY,
+                "原版跳跃暴击必须被关掉（否则与我们的乘区叠成双暴击），实际 result="
+                        + vanillaCrit.getResult());
+
+        AttackPipeline.Input input = CardCombat.attackInputFor(state.profile(), 100.0, null, 0.0);
+        helper.assertTrue(input != null && Math.abs(input.critMultiplier() - 1.4) < 1e-9,
+                "同一份快照喂进乘区要拿到 ×1.4，实际 " + (input == null ? "null" : input.critMultiplier()));
+        helper.assertTrue(Math.abs(CardCombat.attackInputFor(state.profile(), 100.0, null,
+                CardCombat.NEVER_CRITS).critMultiplier() - 1.0) < 1e-9,
+                "不判定的那条入口不能带进任何暴击系数");
+
+        // 端到端：把 roll 钉成"一定中"，真实一刀就该是 10 → 14（面板 10% 暴、倍率 ×1.4）
+        CardCombat.pinCritRoll(0.0);
+        double critHit = dealtTo(helper.makeMockSurvivalPlayer(), striker, 10.0F);
+        helper.assertTrue(Math.abs(critHit - 14.0) < 1e-3,
+                "真实一刀要吃到我们自己的暴击，实际 " + critHit + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(CardCombat.lastTrace().toString().contains("× 暴击 1.4"),
+                "留痕要指到暴击那一格：" + CardCombat.lastTrace());
+
+        CardCombat.resetForTests();
+        double plainHit = dealtTo(helper.makeMockSurvivalPlayer(), striker, 10.0F);
+        helper.assertTrue(Math.abs(plainHit - 10.0) < 1e-3,
+                "不判定暴击时原样落地（这条同时钉住「原版跳跃暴击没在数值里留下痕迹」），实际 " + plainHit);
+
+        helper.succeed();
     }
 
     /** 把卡记进玩家的卡账（卡账是真源，宿主由 {@code CardCombat} 在结算时同步）。 */

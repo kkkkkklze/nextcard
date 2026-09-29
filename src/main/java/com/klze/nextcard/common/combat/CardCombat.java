@@ -5,6 +5,7 @@ import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.CardAttributes;
 import com.klze.nextcard.common.player.PlayerCardState;
 import com.klze.nextcard.core.effect.AttackPipeline;
+import com.klze.nextcard.core.effect.CritRules;
 import com.klze.nextcard.core.effect.DefencePipeline;
 import com.klze.nextcard.core.effect.EffectHost;
 import com.klze.nextcard.core.effect.Facts;
@@ -26,6 +27,8 @@ import net.minecraftforge.event.entity.living.LivingDamageEvent;
 import net.minecraftforge.event.entity.living.LivingDeathEvent;
 import net.minecraftforge.event.entity.living.ShieldBlockEvent;
 import net.minecraftforge.event.entity.player.AttackEntityEvent;
+import net.minecraftforge.event.entity.player.CriticalHitEvent;
+import net.minecraftforge.eventbus.api.Event;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
 
@@ -66,6 +69,18 @@ public final class CardCombat {
     private static List<String> lastTrace = List.of();
     private static final Set<String> REPORTED_UNSUPPORTED = new LinkedHashSet<>();
 
+    /**
+     * 暴击随机数的来源。<b>null = 用世界的 {@code level.random}</b>（生产走这条）；
+     * 非 null 表示被测试钉住了。
+     *
+     * <p>为什么要有这个口子：面板有 5% 基线暴击之后，任何"这一刀正好掉 15 点"的世界内断言
+     * 都会变成 5% 概率飘红（实测就飘了——一条写了十三遍全绿的门，第十四遍读到 19.5）。
+     * 飘的不是 bug，是断言不成立。{@link #resetForTests()} 把测试态钉成"不判定暴击"，
+     * 要验暴击的那条再显式 {@link #pinCritRoll(double)}。生产永远不会调这两个方法。</p>
+     */
+    @Nullable
+    private static java.util.function.DoubleSupplier critRollOverride;
+
     private CardCombat() {
     }
 
@@ -91,6 +106,18 @@ public final class CardCombat {
         pipelineRuns = 0;
         lastTrace = List.of();
         REPORTED_UNSUPPORTED.clear();
+        critRollOverride = () -> CritRules.NO_ROLL;   // 测试态默认"不判定暴击"，精确掉血断言才成立
+    }
+
+    /** 只给测试用：把这一发的暴击判定钉成指定的 roll（0.0 = 一定中到概率那一次）。 */
+    public static void pinCritRoll(double roll) {
+        critRollOverride = () -> roll;
+    }
+
+    /** 生产用世界的随机源；被钉住时用钉住的那个值。 */
+    private static double critRoll(LivingEntity victim) {
+        return critRollOverride != null ? critRollOverride.getAsDouble()
+                : victim.level().random.nextDouble();
     }
 
     @SubscribeEvent
@@ -106,8 +133,10 @@ public final class CardCombat {
 
         Triggers.Result onTaken = fire(defender, defenceView, Triggers.DAMAGE_TAKEN,
                 basesOf(defender, incoming));
+        // 暴击那一次随机数从世界的随机源取（原版跳跃暴击已经被 onCriticalHit 关掉，
+        // 所以这里是唯一的暴击来源，不会与原版叠成双暴击）
         Settlement.Result result = settle(attacker == null ? null : attacker.profile(), attackView,
-                defender == null ? null : defender.profile(), onTaken.vetoReason(), incoming);
+                defender == null ? null : defender.profile(), onTaken.vetoReason(), incoming, critRoll(victim));
         if (result != null) {
             event.setAmount((float) result.value());
             pipelineRuns++;
@@ -180,6 +209,28 @@ public final class CardCombat {
         Triggers.Result result = fire(striker, DamageContact.attackView(killer, victim),
                 Triggers.KILL, basesOf(striker, 0.0));
         perform(striker, victim, killer, result);
+    }
+
+    /**
+     * 原版跳跃暴击一律关掉（klze 裁定 2026-09-29："不需要跳跃"）。
+     *
+     * <p>为什么必须关：我们的暴击是攻方乘区里的一格（{@link CritRules}），而原版的 ×1.5 发生在
+     * {@code Player#attack} 里、<em>早于</em>我们的接管点——不关的话一记空中暴击会变成
+     * "原版 1.5 × 我们 1.3"，同一个乘区生效两遍（与"倍率只能生效一次"是同一条纪律）。</p>
+     *
+     * <p>用 {@code DENY} 而不是取消事件：1.20.1 的 {@code CriticalHitEvent} 是
+     * {@code @HasResult}、<b>不可 cancel</b>（源码核过 {@code ForgeHooks#getCriticalHit}：
+     * 只有 {@code ALLOW}、或"原版判成暴击且结果为 DEFAULT"时才把事件对象还回去）。
+     * {@code DENY} 让 {@code Player#attack} 里的 {@code flag2} 变 false，于是<em>粒子与音效也一起停</em>
+     * ——不会出现"看着像暴击、数值不是"那种错位（另一作者的实现正踩在那里）。</p>
+     *
+     * <p>顺带一条原版联动要记进口径：横扫（{@code flag3}）的前提之一是"这一发不是暴击"，
+     * 关掉跳跃暴击之后，原本会被判成暴击的那几刀改为<em>可能触发横扫</em>。这是可观察的手感变化，
+     * 不是 bug。</p>
+     */
+    @SubscribeEvent
+    public static void onCriticalHit(CriticalHitEvent hit) {
+        hit.setResult(Event.Result.DENY);
     }
 
     /**
@@ -405,7 +456,21 @@ public final class CardCombat {
     public static Settlement.Result settle(@Nullable MechanicProfile attack, @Nullable Facts contact,
                                            @Nullable MechanicProfile defence, @Nullable String vetoReason,
                                            double incoming) {
-        AttackPipeline.Input input = attackInputFor(attack, incoming, contact);
+        return settle(attack, contact, defence, vetoReason, incoming, NEVER_CRITS);
+    }
+
+    /**
+     * 同一条链，但把<em>暴击那一次随机数</em>交进来。
+     *
+     * <p>为什么是 {@code double critRoll} 而不是 {@code Random}：暴击要在无头环境里被证明，
+     * 而 {@code level.random} 的取值随世界状态变。传一个 {@code [0,1)} 的数进来，
+     * "5% 初始暴击率""溢出再暴击"这类判据就能钉死具体数值；接管点负责从世界取那个数。</p>
+     */
+    @Nullable
+    public static Settlement.Result settle(@Nullable MechanicProfile attack, @Nullable Facts contact,
+                                           @Nullable MechanicProfile defence, @Nullable String vetoReason,
+                                           double incoming, double critRoll) {
+        AttackPipeline.Input input = attackInputFor(attack, incoming, contact, critRoll);
         DefencePipeline.Options options = defenceOptionsFor(defence, vetoReason);
         if (input == null && options == null) {
             return null;
@@ -420,15 +485,29 @@ public final class CardCombat {
         return settle(attack, null, defence, vetoReason, incoming);
     }
 
+    /** 不掷暴击判定的那个值（{@link CritRules#NO_ROLL}）：纯推演与既有断言走这条，暴击那一格不参与。 */
+    public static final double NEVER_CRITS = CritRules.NO_ROLL;
+
     /**
      * 攻方的乘区输入；没有攻方快照时给 null（表示这一发不由卡来加成）。
      *
      * <p>方向增伤是<em>条件乘区</em>：卡面写的那个值只有在"从目标背后 120° 内"这一发才进乘区
      * （《00》背刺的定义），接触不成立时留痕会写"未生效"，好让人看出是"没吃到"而不是"没写"。</p>
+     *
+     * <p>暴击走 {@link CritRules}：面板 = 5% 基线 + {@code channel.crit_chance}，
+     * 倍率 = 130% 基线 + {@code channel.crit_damage}（无上限），超过 100% 的溢出<em>再暴击一次</em>。
+     * 原版那套跳跃暴击由 {@link #onCriticalHit} 关掉，两处必须同时成立，否则就是双暴击。</p>
      */
     @Nullable
     public static AttackPipeline.Input attackInputFor(@Nullable MechanicProfile attack, double incoming,
                                                       @Nullable Facts contact) {
+        return attackInputFor(attack, incoming, contact, NEVER_CRITS);
+    }
+
+    /** 带暴击 roll 的那一条（世界内走这条；纯推演那条默认不暴击）。 */
+    @Nullable
+    public static AttackPipeline.Input attackInputFor(@Nullable MechanicProfile attack, double incoming,
+                                                      @Nullable Facts contact, double critRoll) {
         if (attack == null) {
             return null;
         }
@@ -437,9 +516,11 @@ public final class CardCombat {
         double direction = attack.channel("direction_bonus");
         boolean directionApplies = contact == null
                 || contact.fromBehind(Predicates.BACK_SECTOR_HALF_ANGLE);
+        int crits = CritRules.critCount(CritRules.chance(attack), critRoll);
+        double crit = CritRules.totalMultiplier(CritRules.multiplier(attack), crits);
         return new AttackPipeline.Input(incoming, 1.0, melee > 0 ? "melee" : null,
-                Map.of("melee", melee), allDamage, 0.0, 0.0, 1.0, direction, false, 0.0, 0.0,
-                AttackPipeline.penetration(), directionApplies);
+                Map.of("melee", melee), allDamage, 0.0, 0.0, crit, direction, false, 0.0, 0.0,
+                AttackPipeline.penetration(), directionApplies, crits);
     }
 
     /**

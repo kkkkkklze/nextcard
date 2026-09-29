@@ -17,6 +17,16 @@
       "type": "mechanic_modifier",
       "target": "channel.move_speed",
       "value": 0.2
+    },
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.crit_chance",
+      "value": 0.05
+    },
+    {
+      "type": "mechanic_modifier",
+      "target": "channel.crit_damage",
+      "value": 0.1
     }
   ],
   "name": "card.nextcard.venom_edge",

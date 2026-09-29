@@ -93,19 +93,23 @@ public final class AttackPipeline {
      * @param directionApplicable 这一发的<em>接触</em>是否满足方向条件（背后 120° 之类由调用方
      *                         从 {@link Facts} 判好交进来）。不成立时卡面给的方向增伤值<em>不进乘区</em>，
      *                         但留痕会写"未生效"，好让人一眼看出是"没吃到"而不是"没写"。
+     * @param crits            这一发暴击<em>几次</em>（{@link CritRules} 算出来的）。
+     *                         乘区里用的是 {@code critMultiplier}（已是总系数），这一格只为留痕：
+     *                         溢出连暴时"× 暴击 1.69"要能说出是 1.3 乘了两遍。
      */
     public record Input(double base, double coefficient, @Nullable String attackClass,
                         Map<String, Double> classBonuses, double allDamage, double ownBuff,
                         double specialDamage, double critMultiplier, double directionBonus,
                         boolean capExempted, double flatThisSource, double extraSettlements,
-                        Set<Penetration> penetration, boolean directionApplicable) {
+                        Set<Penetration> penetration, boolean directionApplicable, int crits) {
 
         public Input {
             classBonuses = new TreeMap<>(classBonuses);
             penetration = penetration == null ? Set.of() : Set.copyOf(penetration);
+            crits = Math.max(0, crits);
         }
 
-        /** 不关心方向条件的调用点（纯数值推演、蒙特卡洛）：按"方向已成立"算。 */
+        /** 不关心方向条件、也不报暴击次数的调用点（纯数值推演、蒙特卡洛）：按"方向已成立"算。 */
         public Input(double base, double coefficient, @Nullable String attackClass,
                      Map<String, Double> classBonuses, double allDamage, double ownBuff,
                      double specialDamage, double critMultiplier, double directionBonus,
@@ -113,7 +117,22 @@ public final class AttackPipeline {
                      Set<Penetration> penetration) {
             this(base, coefficient, attackClass, classBonuses, allDamage, ownBuff, specialDamage,
                     critMultiplier, directionBonus, capExempted, flatThisSource, extraSettlements,
-                    penetration, true);
+                    penetration, true, critsOf(critMultiplier));
+        }
+
+        /** 只不报暴击次数的那一个（次数按"乘区不为 1 就是暴击了一次"推）。 */
+        public Input(double base, double coefficient, @Nullable String attackClass,
+                     Map<String, Double> classBonuses, double allDamage, double ownBuff,
+                     double specialDamage, double critMultiplier, double directionBonus,
+                     boolean capExempted, double flatThisSource, double extraSettlements,
+                     Set<Penetration> penetration, boolean directionApplicable) {
+            this(base, coefficient, attackClass, classBonuses, allDamage, ownBuff, specialDamage,
+                    critMultiplier, directionBonus, capExempted, flatThisSource, extraSettlements,
+                    penetration, directionApplicable, critsOf(critMultiplier));
+        }
+
+        private static int critsOf(double critMultiplier) {
+            return critMultiplier == 1.0 ? 0 : 1;
         }
 
         /** 六选一：只有这一格能用，其余分类的加成对本次攻击不产生影响。 */
@@ -209,7 +228,8 @@ public final class AttackPipeline {
                 "× (1+特殊伤害 " + input.specialDamage() + ")");
 
         value = stepped(traces, Step.CRIT, value, value * input.critMultiplier(),
-                "× 暴击 " + input.critMultiplier());
+                "× 暴击 " + input.critMultiplier() + (input.crits() > 1
+                        ? "（" + input.crits() + " 次：暴击率超过 100%，溢出部分再暴击）" : ""));
 
         double direction = input.directionBonus();
         String directionNote = "× (1+方向增伤 " + direction + ")";

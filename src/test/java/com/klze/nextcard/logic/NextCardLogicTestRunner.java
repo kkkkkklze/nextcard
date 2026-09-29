@@ -41,6 +41,7 @@ public final class NextCardLogicTestRunner {
             TriggersTest.class,
             ParryTimingTest.class,
             StillnessTest.class,
+            CritRulesTest.class,
     };
 
     private NextCardLogicTestRunner() {
