@@ -433,20 +433,29 @@ public final class Triggers {
     }
 
     /**
-     * 兑现 {@code crit}：记一枚"下一次攻击"的在途计数。
+     * 兑现 {@code crit}：记 {@code count} 枚"下一次攻击"的在途计数（不写就是 1 枚）。
      *
-     * <p>数不记账本，只记"有没有"（上限 1，再兑现一次只是<em>刷新</em>时长）——{@code chance} 与
-     * {@code damage} 的出处始终是那张卡自己声明的那几个字段，两处存同一个数就是第二个真相。
-     * 读它的是 {@link #armedCrit}，消费它的是 {@link #spendArmedCrit}。</p>
+     * <p><b>{@code seconds} 是<em>失效线</em>，不是 buff 的持续时长</b>：每一枚都只被<em>一次真落地的
+     * 攻击</em>消费（{@link #spendArmedCrit}），到点没打出去才作废。所以"3 秒内下一次攻击必暴"写
+     * {@code {seconds: 3}}，"接下来 3 击必暴"写 {@code {count: 3}}，两者都想要就一起写。</p>
+     *
+     * <p>攒着的枚数上限就是卡面声明的 {@code count}（与 {@code stacks} 同一律：满了再触发<em>不续命</em>，
+     * 因为 {@code PER_LAYER} 每枚各计自己的到期）。数值出处只有卡面那三个字段——{@code chance}/{@code damage}
+     * 不在账本里再放大一次，否则同一个数两份真相。</p>
+     *
+     * <p>读它的是 {@link #armedCrit}，消费它的是 {@link #spendArmedCrit}。</p>
      */
     private static @Nullable String armCrit(String holder, Bound entry, Action action,
                                             CounterStore counters, double nowSeconds) {
         double seconds = action.number("seconds", 0.0);
+        double charges = Math.max(1.0, Math.round(action.number("count", 1.0)));
         CounterStore.Key key = new CounterStore.Key(holder, critResource(entry.cardId()));
-        counters.gain(key, 1, new CounterStore.Rule(1, seconds, CounterStore.Expiry.REFRESH_ALL), nowSeconds);
-        return "武装下一次攻击：暴击率 +" + rounded(action.number("chance", 1.0))
-                + "、暴伤 +" + rounded(action.number("damage", 0.0))
-                + (seconds > 0.0 ? "，" + rounded(seconds) + " 秒内有效" : "，直到下一次攻击");
+        double accepted = counters.gain(key, charges,
+                new CounterStore.Rule(charges, seconds, CounterStore.Expiry.PER_LAYER), nowSeconds);
+        return "武装接下来的 " + (int) counters.amount(key) + " 击：暴击率 +"
+                + rounded(action.number("chance", 1.0)) + "、暴伤 +" + rounded(action.number("damage", 0.0))
+                + (seconds > 0.0 ? "，每枚 " + rounded(seconds) + " 秒内有效" : "，直到打出去")
+                + (accepted < charges ? "（已攒满，这次没续命）" : "");
     }
 
     /**
@@ -468,7 +477,7 @@ public final class Triggers {
             if (counters.amount(key) <= 0.0) {
                 continue;
             }
-            // 一张卡只有一枚在途（上限 1），所以同一张卡上写两遍 crit 也只加一遍——
+            // 一张卡一份账，所以同一张卡上写两遍 crit 也只加一遍数值——
             // 加两遍就是"同一个数两处记"，那正是本项目一直在消的那类双份结算。
             chance += critNumber(entry, "chance", 1.0);
             damage += critNumber(entry, "damage", 0.0);

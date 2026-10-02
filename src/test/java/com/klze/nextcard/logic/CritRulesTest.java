@@ -132,4 +132,27 @@ public class CritRulesTest {
         assertNotNull(result);
         assertEquals(130.0, result.value(), 1e-9, "100 × 1.3");
     }
+
+    /**
+     * 卡面写"必暴"就是要判定这一格：走"不判定"那条入口的调用点（{@link CardCombat#NEVER_CRITS}）
+     * 不能把<em>已经消费掉的</em>武装无声吞掉——账扣了、数没变是最难查的静默。
+     * 补进去的只有"必定那一部分"，概率那一次仍然不赌。
+     */
+    @Test
+    public void anArmedTokenIsNotSwallowedByTheRollFreeEntrypoint() {
+        assertEquals(1, CritRules.critCount(1.05, CritRules.GUARANTEED_ONLY), "105% ⇒ 必定一次、不赌小数");
+        assertEquals(2, CritRules.critCount(2.4, CritRules.GUARANTEED_ONLY), "240% ⇒ 必定两次");
+        assertEquals(0, CritRules.critCount(0.05, CritRules.NO_ROLL), "没武装时那条入口依旧整格跳过");
+
+        AttackPipeline.Input input = CardCombat.attackInputFor(critChannels(0.0, 0.0), 100.0, null,
+                CardCombat.NEVER_CRITS, new CritRules.Armed(1.0, 0.0));
+        assertNotNull(input);
+        assertEquals(1, input.crits(), "不判定 + 有武装 ⇒ 至少给必定那一次");
+        assertEquals(1.3, input.critMultiplier(), 1e-9);
+
+        AttackPipeline.Input unarmed = CardCombat.attackInputFor(critChannels(0.0, 0.0), 100.0, null,
+                CardCombat.NEVER_CRITS);
+        assertNotNull(unarmed);
+        assertEquals(0, unarmed.crits(), "没武装时这条入口的口径一个字都不动（纯推演与蒙特卡洛靠它）");
+    }
 }

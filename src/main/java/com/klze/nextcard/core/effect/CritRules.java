@@ -38,6 +38,16 @@ public final class CritRules {
      */
     public static final double NO_ROLL = -1.0;
 
+    /**
+     * "只拿<em>必定</em>那一部分、概率那一次不赌"的那个 roll 值。
+     *
+     * <p>用途只有一个：调用方走的是"不判定暴击"那条入口（{@link #NO_ROLL}），但这一发身上<em>有武装</em>
+     * ——卡面写的是"必暴"，那就至少该拿到 {@code floor(面板)} 次，而不是整格跳过。取 {@code 1.0}
+     * 是因为 {@code critCount} 判的是 {@code roll < 小数部分}，任何 {@code >= 1} 的值都恰好只让
+     * 必定那部分成立。</p>
+     */
+    public static final double GUARANTEED_ONLY = 1.0;
+
     private CritRules() {
     }
 

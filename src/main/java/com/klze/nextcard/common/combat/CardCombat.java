@@ -584,7 +584,11 @@ public final class CardCombat {
         double melee = attack.channel("melee_damage");
         double direction = attack.channel("direction_bonus");
         double backstab = attack.channel("backstab_bonus");
-        int crits = CritRules.critCount(CritRules.chance(attack, armed), critRoll);
+        // 卡面说"必暴"就是要判定这一格：调用方那条"不判定"（{@code NO_ROLL}，纯推演与测试态用的）
+        // 不能把已经消费掉的武装无声吞掉——否则账扣了、数没变，是最难查的那种静默。
+        // 补进去的是"必定那一部分"，概率那一次仍然不赌。
+        double roll = armed.chance() > 0.0 && critRoll < 0.0 ? CritRules.GUARANTEED_ONLY : critRoll;
+        int crits = CritRules.critCount(CritRules.chance(attack, armed), roll);
         double crit = CritRules.totalMultiplier(CritRules.multiplier(attack, armed), crits);
         return new AttackPipeline.Input(incoming, 1.0, melee > 0 ? "melee" : null,
                 Map.of("melee", melee), allDamage, 0.0, 0.0, crit, direction, false, 0.0, 0.0,

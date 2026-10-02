@@ -178,10 +178,13 @@ public class ParryChargeVocabularyTest {
                 "unknown key meters");
         // crit 的三个数都是"往上加"或"活多久"：旧词表里那个 guaranteed 是同义双写，已经收掉；
         // 负数与带引号的数字都没有语义，必须报错而不是夹成 0（夹了就是"写了却没反应"）
+        // crit 的数都是"往上加"或"活多久/几击"，负数与 0 击都没有语义；带引号的数字同样拒
         assertError(parse("[{\"type\": \"trigger\", \"on\": \"hit\","
                 + " \"actions\": [{\"crit\": {\"guaranteed\": true}}]}]"), "unknown key guaranteed");
         assertError(parse("[{\"type\": \"trigger\", \"on\": \"hit\","
-                + " \"actions\": [{\"crit\": {\"chance\": -1}}]}]"), "must not be negative");
+                + " \"actions\": [{\"crit\": {\"chance\": -1}}]}]"), "must not be below");
+        assertError(parse("[{\"type\": \"trigger\", \"on\": \"hit\","
+                + " \"actions\": [{\"crit\": {\"count\": 0}}]}]"), "must not be below 1.0");
         assertError(parse("[{\"type\": \"trigger\", \"on\": \"hit\","
                 + " \"actions\": [{\"crit\": {\"seconds\": \"3\"}}]}]"), "must be a number");
         assertError(parse("[{\"type\": \"trigger\", \"on\": \"block_success\", \"at\": 2.0,"

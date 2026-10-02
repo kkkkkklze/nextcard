@@ -401,6 +401,33 @@ public class TriggersTest {
                 "同一张卡写两遍也只加一遍（账上只有一枚）");
     }
 
+    /**
+     * {@code count} 那一档（"接下来 3 击"，另一作者卡表里就这一族）：<b>每次真落地只扣一枚</b>，
+     * 攒的上限就是卡面写的那个 count，满了再触发<em>既不续命也不加发数</em>（与 {@code stacks} 同一律）。
+     *
+     * <p>盯的是两件会伪装成正常的事：① 把 {@code seconds} 当 buff 时长用，于是"3 秒内刀刀必暴"；
+     * ② 用 {@code REFRESH_ALL}，于是反复触发变成无限续命。</p>
+     */
+    @Test
+    public void armedChargesBurnOnePerAttackAndDoNotRefreshWhenFull() {
+        CounterStore counters = new CounterStore();
+        List<Triggers.Bound> burst = List.of(bound("burst", "{\"type\":\"trigger\","
+                + " \"on\":\"attack\",\"actions\":[{\"crit\":{\"count\":2,\"seconds\":5,\"chance\":0.5}}]}"));
+
+        fire(Triggers.ATTACK, Facts.NONE, burst, counters, Map.of(), null, 0.0);
+        assertEquals(0.5, Triggers.spendArmedCrit(HOLDER, burst, counters, 1.0).chance(), 1e-9, "第一击吃到");
+        assertEquals(0.5, Triggers.spendArmedCrit(HOLDER, burst, counters, 2.0).chance(), 1e-9, "第二击也吃到");
+        assertEquals(CritRules.Armed.NONE, Triggers.spendArmedCrit(HOLDER, burst, counters, 2.5),
+                "第三击没有了——上限就是卡面那个 count");
+
+        fire(Triggers.ATTACK, Facts.NONE, burst, counters, Map.of(), null, 3.0);
+        fire(Triggers.ATTACK, Facts.NONE, burst, counters, Map.of(), null, 4.0);
+        assertEquals(0.5, Triggers.spendArmedCrit(HOLDER, burst, counters, 7.5).chance(), 1e-9,
+                "到期时刻是 3.0 那一批（+5 秒），4.0 那次是满的、没续命");
+        assertEquals(CritRules.Armed.NONE, Triggers.spendArmedCrit(HOLDER, burst, counters, 8.5),
+                "8.0 一到就作废，不会因为有第二次触发而活到 9.0");
+    }
+
     @Test
     public void theEngineNamespaceGateFailsOnTheRealLoadPath() {
         assertTrue(Triggers.isReservedStackId(Triggers.COOLDOWN_PREFIX + "last_stand"));

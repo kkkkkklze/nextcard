@@ -33,7 +33,7 @@ public record Action(String type, JsonObject body) {
         keys.put("reflect", Set.of("ratio", "basis"));
         keys.put("extra_resolve", Set.of("count", "unbounded", "radius"));
         keys.put("copy_attack", Set.of("radius"));
-        keys.put("crit", Set.of("chance", "damage", "seconds"));
+        keys.put("crit", Set.of("chance", "damage", "seconds", "count"));
         keys.put("lethal_immunity", Set.of("uses", "cooldown"));
         keys.put("force_parry", Set.of("seconds"));
         keys.put("ignore_armor", Set.of("ratio"));
@@ -101,19 +101,21 @@ public record Action(String type, JsonObject body) {
             }
         }
         if (type.equals("crit")) {
-            for (String field : CRIT_AMOUNTS) {
+            for (Map.Entry<String, Double> amount : CRIT_AMOUNTS.entrySet()) {
+                String field = amount.getKey();
                 if (!body.has(field)) {
                     continue;
                 }
                 JsonElement value = body.get(field);
-                // 三个量都是"往上加"或"活多久"，负数没有语义；夹成 0 等于"写了个负数却没反应"。
+                // 这些量都是"往上加"或"活多久/几击"，负数没有语义；夹一下等于"写了个负数却没反应"。
                 // 带引号的数字同样拒——那是手改 JSON 最常见的一种错。
                 if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isNumber()) {
                     errors.add("action crit field " + field + " must be a number, got " + value);
                     return null;
                 }
-                if (value.getAsDouble() < 0.0) {
-                    errors.add("action crit field " + field + " must not be negative, got " + value);
+                if (value.getAsDouble() < amount.getValue()) {
+                    errors.add("action crit field " + field + " must not be below " + amount.getValue()
+                            + ", got " + value);
                     return null;
                 }
             }
@@ -121,8 +123,9 @@ public record Action(String type, JsonObject body) {
         return new Action(type, body);
     }
 
-    /** {@code crit} 里那几个必须是"非负数"的字段。 */
-    private static final Set<String> CRIT_AMOUNTS = Set.of("chance", "damage", "seconds");
+    /** {@code crit} 的字段与各自的下限（{@code count} 至少 1 击，其余可以为 0）。 */
+    private static final Map<String, Double> CRIT_AMOUNTS = Map.of(
+            "chance", 0.0, "damage", 0.0, "seconds", 0.0, "count", 1.0);
 
     /**
      * {@code damage} 允许的基数。写错基数不能"按 0 算"——那会让一张卡看起来完全没伤害，

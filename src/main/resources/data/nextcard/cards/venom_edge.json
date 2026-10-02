@@ -27,6 +27,15 @@
       "type": "mechanic_modifier",
       "target": "channel.crit_damage",
       "value": 0.1
+    },
+    {
+      "type": "trigger",
+      "on": "attack",
+      "actions": [
+        {
+          "crit": {}
+        }
+      ]
     }
   ],
   "name": "card.nextcard.venom_edge",

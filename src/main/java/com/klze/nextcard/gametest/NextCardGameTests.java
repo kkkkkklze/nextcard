@@ -941,6 +941,39 @@ public class NextCardGameTests {
         helper.succeed();
     }
 
+    /**
+     * 绑在 <b>attack</b> 上的武装吃在<em>同一击</em>上："此击必暴"与"下一击必暴"用的是同一个动作，
+     * 区别只来自原版的事件顺序——{@code Player#attack} 第一行（源码 1089 行）发
+     * {@code AttackEntityEvent}，第 1142 行才 {@code hurt(...)}。<b>不需要再加一个"作用范围"字段</b>，
+     * 机制本身已经能表达两代卡（重武池那种"此击暴伤 +20%"、弹反池那种"弹反后下一击必暴"）。
+     *
+     * <p>判据的形状：戴卡那位挥的是<em>他这局的第一刀</em>，之前没有任何东西武装过他，所以这一刀的
+     * 暴击只可能来自"出手事件与伤害事件在同一次调用里"这个顺序本身。倍率跟一个<em>没戴卡</em>的人
+     * 的平A比，这样断言里不含"玩家平A到底多少伤害"这种不该硬编码的数。</p>
+     *
+     * <p>测试态走的是"不判定暴击"那条入口（{@code resetForTests} 钉的 {@code NO_ROLL}）：基线那一刀
+     * 因此完全不吃暴击，而<em>有武装</em>的这一刀按 {@link CritRules#GUARANTEED_ONLY} 至少吃到必定
+     * 那一次——这也顺手证明了"卡面写必暴就不会被不判定的入口吞掉"。</p>
+     */
+    @GameTest
+    public void critArmedOnAttackFeedsThatSameSwing(GameTestHelper helper) {
+        CardCombat.resetForTests();            // 测试态：不判定暴击（没武装的一刀不该有任何暴击）
+        double baseline = swing(helper.makeMockSurvivalPlayer(), helper.makeMockSurvivalPlayer());
+        helper.assertTrue(baseline > 0.0,
+                "前提：平A真的落地了（否则下面的倍率比对是假的绿），实际 " + baseline);
+
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "venom_edge");   // 出手即武装：chance +100%、面板暴伤 130%+10%
+        double sameSwing = swing(striker, helper.makeMockSurvivalPlayer());
+        helper.assertTrue(Math.abs(sameSwing - baseline * 1.4) < 1e-3,
+                "出手时武装的那一发要<em>就在这一击</em>吃到暴击（×1.4），实际 " + sameSwing
+                        + "，基线 " + baseline + "；留痕 " + CardCombat.lastTrace());
+        helper.assertTrue(CardCombat.lastTrace().toString().contains("× 暴击 1.4"),
+                "留痕要指到暴击那一格：" + CardCombat.lastTrace());
+
+        helper.succeed();
+    }
+
     /** 摆一个朝指定朝向的受害者（yaw 0 = 朝 +Z，所以 +Z 那边站的人就是正面）。 */
     private static Player facing(GameTestHelper helper, net.minecraft.world.phys.Vec3 at, float yaw) {
         Player victim = helper.makeMockSurvivalPlayer();
