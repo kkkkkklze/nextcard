@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.klze.nextcard.core.effect.Action;
 import com.klze.nextcard.core.effect.CounterStore;
+import com.klze.nextcard.core.effect.Condition;
 import com.klze.nextcard.core.effect.Facts;
 import com.klze.nextcard.core.effect.MechanicProfile;
 import com.klze.nextcard.core.effect.Mechanics;
@@ -56,6 +57,25 @@ public class VocabularyLandingAuditTest {
     /** 已知缺口：动作词表里注册了、但还没有执行器的六个（写上去会报"没有执行器"，不静默）。 */
     private static final Set<String> DECLARED_ACTION_GAPS = Set.of(
             "stun", "launch", "extra_resolve", "copy_attack", "ignore_armor", "interrupt");
+
+    /**
+     * 已知缺口：判据读得到、但<em>世界侧没人填</em>的开关——写了这类条件的卡今天恒不成立。
+     *
+     * <p>这一本账盯的正是本项目真踩过两次的形状（{@code stacks} 条件没有出处、{@code still_seconds}
+     * 由没人算），那时都是"卡写得对、引擎读得对、中间那一格永远是默认值"。名单里每一项都有原因：
+     * {@code charging}＝蓄力运行时还没接（等输入通道口径）；{@code parried}＝弹反成功目前只发
+     * {@code parry_success} 事件，条件那一路还没人贴旗子；{@code appeared_from_outside_view} 与
+     * {@code target_*} 三条（未察觉那一族）需要世界侧先定"视野/被吸引/失明"到底从哪读。</p>
+     */
+    private static final Set<String> DECLARED_FLAG_GAPS = Set.of(
+            "charging", "parried", "appeared_from_outside_view",
+            "target_controlled", "target_attracted_elsewhere", "target_blind");
+
+    /** 已知缺口：{@code Facts.Builder} 上有 setter、但整条 main 里没人调用（该字段恒为默认值）。 */
+    private static final Set<String> DECLARED_FIELD_GAPS = Set.of("noise", "chargeSeconds");
+
+    /** {@code facts.flag("target_" + text)} 这一族：读法写在 {@code Condition} 里，取值由 TARGET_STATES 拼。 */
+    private static final String TARGET_FLAG_PREFIX = "flag(\"target_\"";
 
     /** 执行器报"没有执行器"的原话片段（改这句话要连这里一起改，别让它悄悄换词）。 */
     private static final String NO_EXECUTOR = "引擎还没有执行器";
@@ -155,6 +175,142 @@ public class VocabularyLandingAuditTest {
                         + "少掉的＝已经落地，请把这个名字从缺口名单和 docs 里删掉。 实际无执行器：" + gaps);
     }
 
+    // —— 账三：事实开关（判据读得到 vs 世界侧填得到）——
+
+    /**
+     * 每个被读的事实开关都得有人<em>写</em>；每个被写的开关都得有人<em>读</em>；
+     * 注册表里不许躺着谁都不碰的开关名。
+     *
+     * <p>"卡写得对、引擎也读对了，中间那一格永远是默认值"——这是本项目真踩过两次的那类缺陷
+     * （{@code stacks} 没出处、{@code still_seconds} 没人算）。开关比通道更隐蔽：通道读错名字
+     * 至少还有 {@code channel("…")} 这个形状可扫，开关是<em>两边各写一次字符串</em>，
+     * 拼错任何一边都不会有人报错，只会让那条条件安静地恒假。</p>
+     */
+    @Test
+    public void everyFlagTheJudgementReadsIsSomebodyFilledIn() throws IOException {
+        Set<String> read = flagReads();
+        Set<String> written = flagWrites();
+        assertTrue(!read.isEmpty() && !written.isEmpty(),
+                "开关扫描空转了（读 " + read.size() + " / 写 " + written.size() + "）——先确认目录属性指对");
+        Set<String> unproduced = new LinkedHashSet<>(read);
+        unproduced.removeAll(written);
+        assertEquals(DECLARED_FLAG_GAPS, unproduced,
+                "有开关被判据读了但没人填（写了这类条件的卡恒不成立）。多出来的请先去世界侧补出处，"
+                        + "少掉的＝已经填上了，把名字从缺口名单与 docs 里删掉。 实际没人填：" + unproduced);
+    }
+
+    /** 另一侧：世界填了但没人读的开关＝白算，而且迟早与判据那边的拼写分家。 */
+    @Test
+    public void everyFlagTheWorldFillsIsReadByAJudgement() throws IOException {
+        Set<String> unread = new LinkedHashSet<>(flagWrites());
+        unread.removeAll(flagReads());
+        assertTrue(unread.isEmpty(),
+                "世界侧算了开关但没有任何判据读它（白算一场，而且迟早与判据那边的拼写分家）：" + unread);
+    }
+
+    /** 注册表里不许躺着谁都不碰的开关名——那等于往词表里塞了一个永远用不上的名字。 */
+    @Test
+    public void everyRegisteredFlagIsTouchedBySomebody() throws IOException {
+        Set<String> touched = new LinkedHashSet<>(flagReads());
+        touched.addAll(flagWrites());
+        Set<String> dead = new LinkedHashSet<>(Facts.FLAG_NAMES);
+        dead.removeAll(touched);
+        assertTrue(dead.isEmpty(), "注册表里躺着谁都不碰的开关名（要么补判据、要么删掉）：" + dead);
+    }
+
+    /** 反方向：两侧写下的开关名必须都在注册表里——{@code flag("mistyped")} 恒为 false，静默。 */
+    @Test
+    public void everyFlagNameUsedIsRegistered() throws IOException {
+        String used = textOf(mainSrc().resolve("core")) + "\n" + textOf(mainSrc().resolve("common"));
+        Set<String> names = flagLiterals(used, FLAG_READ);
+        names.addAll(flagLiterals(used, FLAG_WRITE));
+        Set<String> unknown = new LinkedHashSet<>();
+        for (String name : names) {
+            if (!Facts.FLAG_NAMES.contains(name)) {
+                unknown.add(name);
+            }
+        }
+        assertTrue(unknown.isEmpty(), "用了一个没注册的开关名（读恒 false / 写会在 Facts 构造期抛）：" + unknown);
+    }
+
+    // —— 账四：事实字段（Builder 上有 setter vs main 里真有人调用）——
+
+    /**
+     * {@code Facts.Builder} 上每个单参数 setter 都要有人<em>带参数</em>调过一次。
+     *
+     * <p>没出处的那个字段就<em>永远是默认值</em>，于是读它的条件永远同一个答案——和账三同一类病，
+     * 只是它藏在位置参数里而不是字符串里。扫描要区分 {@code .noise(0.3)}（填）与 {@code .noise()}
+     * （读）：所以匹配的是"点后紧跟一个非右括号的字符"。</p>
+     */
+    @Test
+    public void everyFactFieldHasAProducer() throws IOException {
+        String main = textOf(mainSrc());
+        Set<String> unproduced = new LinkedHashSet<>();
+        for (String setter : builderSetters()) {
+            if (!main.contains("." + setter + "(") || !hasArgCall(main, setter)) {
+                unproduced.add(setter);
+            }
+        }
+        assertEquals(DECLARED_FIELD_GAPS, unproduced,
+                "事实字段的出处账对不上了。多出来的＝引擎有槽位但整条 main 没人填（读它的条件恒按默认值）；"
+                        + "少掉的＝已经有人填了，把名字从缺口名单与 docs 里删掉。 实际没出处：" + unproduced);
+    }
+
+    /** 单参数（或多参）的 Builder setter；{@code with} 归账三，两个 map 形状的不归这里。 */
+    private static Set<String> builderSetters() {
+        Set<String> setters = new LinkedHashSet<>();
+        for (java.lang.reflect.Method method : Facts.Builder.class.getDeclaredMethods()) {
+            if (!java.lang.reflect.Modifier.isPublic(method.getModifiers())
+                    || method.getReturnType() != Facts.Builder.class
+                    || method.getName().equals("build")) {
+                continue;
+            }
+            // layers/count 的读法与写法同名（facts.layers(id) vs builder.layers(id, n)），
+            // 文本扫描分不开，硬把它们算进这本账会自证清白——那一路由 withLedger 与世界内门管。
+            if (method.getName().equals("with") || method.getName().equals("layers")
+                    || method.getName().equals("count")) {
+                continue;
+            }
+            setters.add(method.getName());
+        }
+        assertTrue(setters.size() >= 9, "只反射到 " + setters.size() + " 个 setter（" + setters
+                + "）——Facts.Builder 的形状变了，这本账的靶子也要跟着重钉");
+        return setters;
+    }
+
+    private static boolean hasArgCall(String text, String setter) {
+        Pattern pattern = Pattern.compile("\\." + setter + "\\(\\s*[^)\\s]");
+        return pattern.matcher(text).find();
+    }
+
+    private static final Pattern FLAG_READ = Pattern.compile("flag\\(\"([a-z_]+)\"\\)");
+    private static final Pattern FLAG_WRITE = Pattern.compile("with\\(\"([a-z_]+)\"\\)");
+
+    /** 判据那一侧读到的开关名（{@code core/}）。 */
+    private static Set<String> flagReads() throws IOException {
+        return flagLiterals(textOf(mainSrc().resolve("core")), FLAG_READ);
+    }
+
+    /** 世界那一侧写下的开关名（{@code common/}——接管点是唯一填事实的地方）。 */
+    private static Set<String> flagWrites() throws IOException {
+        return flagLiterals(textOf(mainSrc().resolve("common")), FLAG_WRITE);
+    }
+
+    /** 源码里的开关名（{@code flag("target_" + text)} 那种拼接名按 TARGET_STATES 展开）。 */
+    private static Set<String> flagLiterals(String text, Pattern pattern) {
+        Set<String> names = new LinkedHashSet<>();
+        Matcher matcher = pattern.matcher(text);
+        while (matcher.find()) {
+            names.add(matcher.group(1));
+        }
+        if (pattern == FLAG_READ && text.contains(TARGET_FLAG_PREFIX)) {
+            for (String state : Condition.TARGET_STATES) {
+                names.add("target_" + state);
+            }
+        }
+        return names;
+    }
+
     /** 每个动作一条最小可用卡面——参数要给够，否则"兑现不出东西"与"没有执行器"分不开。 */
     private static Triggers.Result fireAction(String type) {
         Triggers.Bound entry = bound("audit_" + type,
@@ -201,6 +357,20 @@ public class VocabularyLandingAuditTest {
         Path root = Path.of(value);
         assertTrue(Files.isDirectory(root), "nextcard.main.src 不是目录：" + root);
         return root;
+    }
+
+    /** 某个包目录下所有 .java 拼成一份文本（本门的扫描单位；缺目录直接红，不静默给空串）。 */
+    private static String textOf(Path dir) throws IOException {
+        assertTrue(Files.isDirectory(dir), "扫描目录不存在：" + dir);
+        StringBuilder text = new StringBuilder();
+        try (Stream<Path> walk = Files.walk(dir)) {
+            for (Path source : walk.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".java")).toList()) {
+                text.append(Files.readString(source)).append('\n');
+            }
+        }
+        assertTrue(text.length() > 0, "扫描目录是空的：" + dir);
+        return text.toString();
     }
 
     private static Triggers.Bound bound(String path, String json) {

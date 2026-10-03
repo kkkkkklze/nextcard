@@ -31,11 +31,11 @@ public class PredicateRegistryTest {
     private record Case(String json, Facts holds, Facts fails) {
     }
 
-    /** 贴着背后的一刀：残血、在动、蓄着力、目标是被控制的精英、墙 3 层、弹反过 2 次。 */
+    /** 贴着背后的一刀：残血、在动、潜着行、蓄着力、目标是被控制的精英、墙 3 层、弹反过 2 次。 */
     private static final Facts STAB = Facts.builder()
             .attackerHp(0.2).targetHp(0.1).angleOffFront(175.0).distance(2).light(3).noise(0.1)
             .stillSeconds(6).chargeSeconds(2).targetKind("elite")
-            .with("moving").with("blocking").with("charging").with("parried").with("fatal")
+            .with("moving").with("blocking").with("sneaking").with("charging").with("parried").with("fatal")
             .with("appeared_from_outside_view").with("target_controlled")
             .layers("wall", 3).count("parry_success", 2).build();
 
@@ -66,6 +66,7 @@ public class PredicateRegistryTest {
         out.add(new Case("{\"target_kind\": \"elite\"}", STAB, OPEN));
         out.add(new Case("{\"moving\": true}", STAB, STILL));
         out.add(new Case("{\"blocking\": true}", STAB, OPEN));
+        out.add(new Case("{\"sneaking\": true}", STAB, OPEN));
         out.add(new Case("{\"charge_active\": true}", STAB, OPEN));
         out.add(new Case("{\"parry\": true}", STAB, OPEN));
         out.add(new Case("{\"fatal\": true}", STAB, OPEN));

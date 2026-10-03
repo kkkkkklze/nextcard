@@ -27,7 +27,7 @@ public record Condition(String key, double number, String text, String stackId, 
             "hp_below", "hp_above", "still_seconds", "charge_seconds",     // 数值（自己）
             "target_hp_below", "distance_within", "light_below", "noise_below", "back_sector",
             "angle", "target_state", "target_kind",                        // 枚举
-            "moving", "blocking", "charge_active", "parry", "fatal",       // 开关
+            "moving", "blocking", "sneaking", "charge_active", "parry", "fatal",   // 开关
             "appeared_outside_view",
             "stacks", "count");                                            // 引用
 
@@ -36,8 +36,8 @@ public record Condition(String key, double number, String text, String stackId, 
 
     private static final Set<String> NUMERIC = Set.of("hp_below", "hp_above", "still_seconds", "charge_seconds",
             "target_hp_below", "distance_within", "light_below", "noise_below", "back_sector");
-    private static final Set<String> FLAG = Set.of("moving", "blocking", "charge_active", "parry", "fatal",
-            "appeared_outside_view");
+    private static final Set<String> FLAG = Set.of("moving", "blocking", "sneaking", "charge_active", "parry",
+            "fatal", "appeared_outside_view");
     private static final Set<String> TEXT = Set.of("angle", "target_state", "target_kind");
     private static final Set<String> REF = Set.of("stacks", "count");
 
@@ -227,6 +227,7 @@ public record Condition(String key, double number, String text, String stackId, 
         return switch (key) {
             case "moving" -> facts.flag("moving");
             case "blocking" -> facts.flag("blocking");
+            case "sneaking" -> facts.flag("sneaking");
             case "charge_active" -> facts.flag("charging");
             case "parry" -> facts.flag("parried");
             case "fatal" -> facts.flag("fatal");
@@ -243,6 +244,7 @@ public record Condition(String key, double number, String text, String stackId, 
         return switch (key) {
             case "moving" -> "在移动";
             case "blocking" -> "正在格挡";
+            case "sneaking" -> "正在潜行";
             case "charge_active" -> "蓄力中";
             case "parry" -> "刚刚弹反成功";
             case "fatal" -> "这一发致命";
