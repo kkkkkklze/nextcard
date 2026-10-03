@@ -9,6 +9,7 @@ import com.klze.nextcard.core.effect.CritRules;
 import com.klze.nextcard.core.effect.DefencePipeline;
 import com.klze.nextcard.core.effect.EffectHost;
 import com.klze.nextcard.core.effect.Facts;
+import com.klze.nextcard.core.effect.Lifesteal;
 import com.klze.nextcard.core.effect.MechanicClause;
 import com.klze.nextcard.core.effect.MechanicProfile;
 import com.klze.nextcard.core.effect.ParryTiming;
@@ -174,6 +175,10 @@ public final class CardCombat {
         }
         perform(defender, victim, source, onTaken);
 
+        // 结算后真的落到身上多少，攻击者就按 `channel.lifesteal` 的比例回复多少（比例为 0 时什么都没发生）。
+        double dealt = result == null ? incoming : result.value();
+        healLifesteal(attacker, source, dealt);
+
         // 攻方的"命中时"排在结算之后：这一发的数已经定了，攒下的层与补出去的伤害给下一发用。
         // 我们自己补的那一发不再叫醒攻方触发器——否则 damage → hit → damage 一路递归到栈溢出。
         if (!CardDamageSource.isEngineExtra(damageSource)) {
@@ -182,12 +187,30 @@ public final class CardCombat {
 
             // "造成伤害时"要的是<em>结算后</em>那个真的落到身上的数：被对面免疫成 0 的那发不算，
             // 所以它比 hit 少一条通道（同一个"打中了"，一个看动作成没成，一个看数落没落）。
-            double dealt = result == null ? incoming : result.value();
             if (dealt > 0.0) {
                 Triggers.Result onDealt = fire(attacker, attackView, Triggers.DAMAGE_DEALT,
                         basesOf(attacker, dealt));
                 perform(attacker, victim, source, onDealt);
             }
+        }
+    }
+
+    /**
+     * 吸血落点。基数取<em>落到目标身上的最终值</em>（{@link Lifesteal} 那条口径，与 {@code damage_dealt}
+     * 同一条律），而不是结算前的总量。
+     *
+     * <p>自家 {@code damage}/{@code reflect} 补出去的那一发<em>也吸</em>：把引擎自伤排除在触发器之外
+     * 只是为了断递归（{@code damage→hit→damage→…}），而回复不产生任何事件，不会自己叫醒自己。</p>
+     *
+     * <p>不做"吸血上限"这类夹子——原版 {@code heal} 自己夹在生命上限内，再夹一层就是第二处真相。</p>
+     */
+    private static void healLifesteal(@Nullable State attacker, @Nullable Entity source, double dealt) {
+        if (attacker == null || !(source instanceof LivingEntity living)) {
+            return;
+        }
+        double amount = Lifesteal.amount(attacker.profile(), dealt);
+        if (amount > 0.0) {
+            living.heal((float) amount);
         }
     }
 

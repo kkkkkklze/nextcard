@@ -43,6 +43,11 @@
       }
     },
     {
+      "type": "mechanic_modifier",
+      "target": "channel.lifesteal",
+      "value": 0.15
+    },
+    {
       "type": "trigger",
       "on": "tick",
       "every": 2.0,

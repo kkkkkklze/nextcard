@@ -616,7 +616,7 @@ public class NextCardGameTests {
         helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "venom") == 3.0,
                 "三刀三层");
         helper.assertTrue(third > second + 1.0,
-                "叠满三层的那一刀要额外补一发（2 点常数伤害，被原版无敌帧按差值削成 1.8），"
+                "叠满三层的那一刀要额外补一发（2 点常数伤害；自家伤害绕过原版无敌帧，所以这 2 点是整个落下的），"
                         + "实际 " + third + " vs 上一刀的 " + second);
 
         helper.succeed();
@@ -1022,6 +1022,61 @@ public class NextCardGameTests {
                         + "，基线 " + baseline + "；留痕 " + CardCombat.lastTrace());
         helper.assertTrue(CardCombat.lastTrace().toString().contains("× 暴击 1.4"),
                 "留痕要指到暴击那一格：" + CardCombat.lastTrace());
+
+        helper.succeed();
+    }
+
+    /**
+     * 吸血（{@code channel.lifesteal}）在世界里回的是<em>真的落到目标身上</em>的那部分——
+     * 示例卡「凤凰吐息」(`phoenix_breath`) 带 15%。三段各钉一件事：
+     * ① 落到 10 点回 1.5；② 被对面免疫成 0 的那发<em>一点都不吸</em>（基数不是"出手的量"，
+     * 与 {@code damage_dealt} 同一条律；另一作者用的是结算前的 total，两种口径只能留一份）；
+     * ③ 越过生命上限的那部分由原版 {@code heal} 自己夹住，引擎没有再夹一层；
+     * ④ 自家补出去的冲击波<em>也算落到身上</em>，所以也吸（断言的是不变式：回复量 = 比例 × 目标实际掉血）。
+     */
+    @GameTest
+    public void lifestealReturnsOnlyWhatActuallyLanded(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player striker = helper.makeMockSurvivalPlayer();
+        grant(helper, striker, "phoenix_breath");
+        striker.setHealth(10.0F);
+
+        double landed = dealtTo(helper.makeMockSurvivalPlayer(), striker, 10.0F);
+        helper.assertTrue(Math.abs(landed - 10.0) < 1e-3,
+                "前提：这一发整个落在身上了（护甲 0），实际 " + landed);
+        helper.assertTrue(Math.abs(striker.getHealth() - 11.5F) < 1e-3,
+                "落到 10 点 ⇒ 按 15% 回复 1.5，实际 " + striker.getHealth());
+
+        striker.setHealth(10.0F);
+        Player warded = helper.makeMockSurvivalPlayer();
+        grant(helper, warded, "last_stand");
+        warded.setHealth(0.05F);                       // 这一发是致命的 ⇒ 免疫会把它打成 0
+        double vetoed = dealtTo(warded, striker, 10.0F);
+        helper.assertTrue(Math.abs(vetoed) < 1e-3, "前提：那发被免疫打成 0，实际 " + vetoed);
+        helper.assertTrue(Math.abs(striker.getHealth() - 10.0F) < 1e-3,
+                "没落到身上就没有可吸的——基数是最终值，实际 " + striker.getHealth());
+
+        striker.setHealth(19.9F);
+        dealtTo(helper.makeMockSurvivalPlayer(), striker, 10.0F);
+        helper.assertTrue(striker.getHealth() == 20.0F,
+                "回复越过上限那部分由原版夹住（引擎没再夹一层），实际 " + striker.getHealth());
+
+        // 自家补出去的那一发（「连锁毒瀑」叠满三层后补的常数伤害，半径 0 打在直接目标上）也算落到身上，
+        // 所以也吸。这里不断言那一发具体多少（那要读毒层的近战增伤，不该钉在吸血这条门上），
+        // 只断言不变式：<b>回复量 == 比例 × 目标实际掉的血</b>。那一发没吸的话等式就短一截。
+        grant(helper, striker, "venom_cascade");
+        String holder = striker.getUUID().toString();
+        CardCombat.HOST.counters().gain(new com.klze.nextcard.core.effect.CounterStore.Key(holder, "venom"),
+                3, new com.klze.nextcard.core.effect.CounterStore.Rule(3, 0.0,
+                        com.klze.nextcard.core.effect.CounterStore.Expiry.PER_LAYER), 0.0);
+        striker.setHealth(10.0F);
+        Player drilled = helper.makeMockSurvivalPlayer();
+        double total = dealtTo(drilled, striker, 10.0F);
+        helper.assertTrue(total > 12.0,
+                "前提：叠满三层的那一刀额外补了一发（否则下面那条等式是在空转），实际掉血 " + total);
+        helper.assertTrue(Math.abs(striker.getHealth() - (10.0F + 0.15F * (float) total)) < 1e-2,
+                "回复量要等于 15% × 全部落到身上的伤害（本体 + 自家补的那一发），实际 "
+                        + striker.getHealth() + "，目标掉血 " + total);
 
         helper.succeed();
     }
