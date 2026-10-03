@@ -112,6 +112,58 @@ public class NextCardGameTests {
     }
 
     /**
+     * 运行期状态<em>不进存档</em>：层数、强制精准窗口、"下一次攻击"的武装、本局事件计数都在内存里，
+     * 写盘的只有卡账（拥有哪些卡 / 抽了几次 / 体系计数器）。
+     *
+     * <p>模拟重启＝清空 {@code HOST.counters()} 之后只从 NBT 重建卡账：卡还在，层数与武装一律归零。
+     * {@code CounterStore#snapshot} 的<em>唯一读者</em>是 {@code Triggers.inFlight}（周期与调试的读法），
+     * 写档路径里没有它——所以"攒着必暴等下次上线再打"这种卡会掉，写卡的人必须知道。</p>
+     */
+    @GameTest
+    public void inFlightStateIsNotPartOfTheSaveGame(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player bearer = helper.makeMockSurvivalPlayer();
+        grant(helper, bearer, "iron_root");
+        grant(helper, bearer, "ash_guard");
+        String holder = bearer.getUUID().toString();
+
+        dealtTo(helper.makeMockSurvivalPlayer(), bearer, 10.0F);    // 命中 → 攒一层「扎根」
+        dealtTo(bearer, helper.makeMockSurvivalPlayer(), 3.0F);     // 挨一发 → 武装下一次攻击
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "root") == 1.0,
+                "前提：那一层真的攒上了");
+        CardCombat.State live = CardCombat.stateOf(bearer);
+        helper.assertTrue(live != null && Triggers.armedCrit(holder, live.triggers(),
+                        CardCombat.HOST.counters(), live.nowSeconds()).chance() > 0.0,
+                "前提：下一次攻击已经武装上了");
+        helper.assertTrue(live != null && Triggers.forcedPrecise(holder, live.triggers(),
+                        CardCombat.HOST.counters(), live.nowSeconds()),
+                "前提：强制精准那枚窗口也挂上了（「扎根」的 damage_taken 动作）");
+
+        CompoundTag saved = PlayerCardState.saveOf(PlayerCardState.of(bearer));
+        helper.assertTrue(saved.contains("schema") && saved.contains("owned") && saved.contains("draws")
+                        && saved.contains("counters") && saved.getAllKeys().size() == 4,
+                "存档里就只有这四类键，多一个键就说明有人在往档里塞运行期状态：" + saved.getAllKeys());
+
+        CardCombat.HOST.counters().clearAll();                      // 重启：内存那本账没了
+        CardLedger restored = new CardLedger();
+        PlayerCardState.loadInto(restored, saved);
+        helper.assertTrue(restored.size() == 2, "两张卡要读得回来：" + restored.ownedAsText());
+        helper.assertTrue(Triggers.layers(CardCombat.HOST.counters(), holder, "root") == 0.0,
+                "层数不该被任何读档路径重建（它本来就没写下去）");
+        CardCombat.State after = CardCombat.stateOf(bearer);
+        CritRules.Armed restarted = after == null ? CritRules.Armed.NONE
+                : Triggers.spendArmedCrit(holder, after.triggers(), CardCombat.HOST.counters(),
+                        after.nowSeconds());
+        helper.assertTrue(restarted.chance() == 0.0 && restarted.damage() == 0.0,
+                "武装过的必暴同样不跨重启——攒 buff 的卡要知道这条，实际 " + restarted);
+        helper.assertTrue(after != null && !Triggers.forcedPrecise(holder, after.triggers(),
+                        CardCombat.HOST.counters(), after.nowSeconds()),
+                "强制精准窗口也不跨重启");
+
+        helper.succeed();
+    }
+
+    /**
      * 卡的加成与减免真的改变世界里的一刀——不是只在纯逻辑里成立。
      *
      * <p>前面的门证明"能加载、能算"，这条证明"接在链路上"：{@code LivingDamageEvent} 是原版算完
