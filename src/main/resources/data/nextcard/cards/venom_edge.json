@@ -34,6 +34,11 @@
       "value": 0.5
     },
     {
+      "type": "mechanic_modifier",
+      "target": "channel.max_health_scale",
+      "value": 0.2
+    },
+    {
       "type": "trigger",
       "on": "attack",
       "actions": [

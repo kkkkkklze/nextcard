@@ -143,8 +143,9 @@ public class ParryChargeVocabularyTest {
         assertEquals(0.15, profile.channel("max_health_scale"), 1e-9,
                 "乘区通道照样是增量（0.15 = +15%），自成相乘桶是通道语义、不是另一种合成方式");
         assertTrue(Mechanics.SCALE_CHANNELS.contains("max_health_scale"));
-        assertEquals(Set.of("armor"), profile.vanillaChannels().keySet(),
-                "只有护甲/生命上限/移速/攻速能直接落成原版属性");
+        assertEquals(Set.of("armor", "max_health_scale"), profile.vanillaChannels().keySet(),
+                "能直接落成原版属性的只有这六条：armor / max_health / max_health_scale / base_damage"
+                        + " / move_speed / attack_speed（2026-10-03 起后两条也落地，见《引擎侧进度》补二十三）");
     }
 
     /** 每层来源：层数由拥有状态提供（每层「战意」+3% 蓄力速度）。 */

@@ -351,20 +351,30 @@ public class NextCardGameTests {
     }
 
     /**
-     * "附带数值"真的挂到身上：+10 护甲、+20% 移速进属性；卡没了就得摘干净。
+     * "附带数值"真的挂到身上：+10 护甲、+20% 移速、+4 基础攻击力、生命上限两个桶
+     * （先加 5 点、再乘 1.2）都进属性；卡没了就得摘干净。
      *
      * <p>这条堵的是覆盖表里排第一的那半：通道折进快照了，但没人把它们投影到原版属性上，
      * 于是卡表那一整列 {@code +20 护甲值} 是空话——而且表现得很像"这张卡没用"。</p>
+     *
+     * <p>生命上限那两个桶是这条里最要紧的断言：{@code max_health}（点值）与
+     * {@code max_health_scale}（独立乘区）落在<em>同一条属性</em>上，如果它们合成一个桶，
+     * 25 与 30 就差出来了——"桶内加算、桶间相乘"这条律（{@code Mechanics.SCALE_CHANNELS}）
+     * 在别处只有一张表，只有原版属性算法会当场把它验死。</p>
      */
     @GameTest
     public void vanillaChannelsLandOnAttributes(GameTestHelper helper) {
         CardCombat.resetForTests();
         Player owner = helper.makeMockSurvivalPlayer();
-        grant(helper, owner, "venom_edge");
+        grant(helper, owner, "venom_edge");      // armor +10、move_speed +20%、max_health_scale ×1.2
+        grant(helper, owner, "twin_fang");      // max_health +5 点、base_damage +4 点
 
         double armorBefore = owner.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ARMOR);
         double speedBefore = owner.getAttributeValue(
                 net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED);
+        double attackBefore = owner.getAttributeValue(
+                net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
+        double healthBefore = owner.getMaxHealth();
         CardCombat.stateOf(owner);   // 上线/命中时同步一次，属性就跟着投影
 
         double armorAfter = owner.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ARMOR);
@@ -373,7 +383,21 @@ public class NextCardGameTests {
         helper.assertTrue(Math.abs(armorAfter - armorBefore - 10.0) < 1e-6,
                 "护甲该 +10 点，实际 " + (armorAfter - armorBefore));
         helper.assertTrue(Math.abs(speedAfter - speedBefore * 1.2) < 1e-9,
-                "移速该是 ×1.2（比值通道，不是点值），实际 " + speedAfter + " vs " + speedBefore);
+                "移速该是 ×1.2（比值通道，不是点值），实际 " + speedAfter
+                        + " 期望 " + (speedBefore * 1.2));
+
+        double attackAfter = owner.getAttributeValue(
+                net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE);
+        helper.assertTrue(Math.abs(attackAfter - attackBefore - 4.0) < 1e-6,
+                "基础攻击力该 +4 点（点值通道走 ADDITION 进 ATTACK_DAMAGE），实际 "
+                        + (attackAfter - attackBefore));
+        helper.assertTrue(Math.abs(owner.getMaxHealth() - (healthBefore + 5.0) * 1.2) < 1e-6,
+                "生命上限是两个桶：先加 5 点、再乘 1.2 ⇒ 应为 " + ((healthBefore + 5.0) * 1.2)
+                        + "，实际 " + owner.getMaxHealth());
+
+        CardCombat.stateOf(owner);
+        helper.assertTrue(Math.abs(owner.getMaxHealth() - (healthBefore + 5.0) * 1.2) < 1e-6,
+                "上限两个桶重算一遍不能变成三次（幂等），实际 " + owner.getMaxHealth());
 
         CardCombat.stateOf(owner);
         helper.assertTrue(Math.abs(owner.getAttributeValue(
@@ -387,6 +411,11 @@ public class NextCardGameTests {
         helper.assertTrue(Math.abs(owner.getAttributeValue(
                         net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED) - speedBefore) < 1e-9,
                 "移速那条也要一起摘");
+        helper.assertTrue(Math.abs(owner.getMaxHealth() - healthBefore) < 1e-6,
+                "上限的两条修正（点值与乘区）都要摘干净，实际 " + owner.getMaxHealth());
+        helper.assertTrue(Math.abs(owner.getAttributeValue(
+                        net.minecraft.world.entity.ai.attributes.Attributes.ATTACK_DAMAGE) - attackBefore) < 1e-6,
+                "基础攻击力也要一起摘");
 
         helper.succeed();
     }

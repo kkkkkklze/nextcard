@@ -95,8 +95,17 @@ public final class Mechanics {
     /** 乘区通道：卡面写"额外乘区"的独立相乘桶——桶内仍然加算，桶本身才与主桶相乘。 */
     public static final Set<String> SCALE_CHANNELS = Set.of("max_health_scale");
 
-    /** 能直接落成原版 AttributeModifier 的通道；其余进自定义伤害管线（M2）。 */
-    public static final Set<String> VANILLA_CHANNELS = Set.of("armor", "max_health", "move_speed", "attack_speed");
+    /**
+     * 能直接落成原版 AttributeModifier 的通道；其余进自定义伤害管线（M2）。
+     *
+     * <p>{@code base_damage} 落的是 {@code ATTACK_DAMAGE}（面板基础攻击力，所以它是<em>加法</em>进
+     * 属性、由原版算出更大的那一发，我们的管线只乘一次）；{@code max_health_scale} 与
+     * {@code max_health} 同一条属性但走乘区，见 {@link #SCALE_CHANNELS}。
+     * {@code physical_damage} / {@code resistance} 仍然不能走这条路——它们要的是<em>伤害分类</em>，
+     * 原版没有那张表。</p>
+     */
+    public static final Set<String> VANILLA_CHANNELS = Set.of(
+            "armor", "max_health", "max_health_scale", "move_speed", "attack_speed", "base_damage");
 
     private static final Map<String, Slot> SLOTS = buildSlots();
 

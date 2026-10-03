@@ -35,7 +35,7 @@ import java.util.UUID;
  */
 public final class CardAttributes {
 
-    /** 通道 → 原版属性（只有这四个 {@link Mechanics#VANILLA_CHANNELS}，其余走自定义管线）。 */
+    /** 通道 → 原版属性（只有 {@link Mechanics#VANILLA_CHANNELS} 列的那些，其余走自定义管线）。 */
     private static final Map<String, Attribute> BY_CHANNEL = channels();
 
     private CardAttributes() {
@@ -45,6 +45,10 @@ public final class CardAttributes {
         Map<String, Attribute> map = new LinkedHashMap<>();
         map.put("armor", Attributes.ARMOR);
         map.put("max_health", Attributes.MAX_HEALTH);
+        // 两条通道同一条属性、两个桶：max_health 是点值相加，max_health_scale 是独立乘区
+        // （Mechanics.FLAT_CHANNELS 决定用哪种运算，这里不再各写一份判断）
+        map.put("max_health_scale", Attributes.MAX_HEALTH);
+        map.put("base_damage", Attributes.ATTACK_DAMAGE);
         map.put("move_speed", Attributes.MOVEMENT_SPEED);
         map.put("attack_speed", Attributes.ATTACK_SPEED);
         return Map.copyOf(map);
