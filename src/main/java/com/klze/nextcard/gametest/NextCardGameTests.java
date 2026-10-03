@@ -421,6 +421,62 @@ public class NextCardGameTests {
     }
 
     /**
+     * 死一次之后，卡给的护甲还在不在。
+     *
+     * <p>我们的属性修正是 <em>transient</em> 的，而原版这条路只带"永久"那一半：
+     * {@code AttributeInstance#save} 的 {@code "Modifiers"} 列表写的就是
+     * {@code permanentModifiers}（源码第 175 行那颗判断），而重生走的
+     * {@code ServerPlayer#restoreFrom} 逐条搬物品栏/血量/经验/<em>就是不搬属性表</em>
+     * （1.20.1 里唯一会连着 transient 一起搬的 {@code AttributeMap#assignValues}，
+     * 只有客户端换本地玩家时调，{@code ClientPacketListener} 第 1071 行）。
+     * 所以"上线/重生时重投影一次"不是保险丝，是唯一那条让加成立的路。</p>
+     *
+     * <p>这里不直接调用处理函数，而是<em>往事件线上发真事件</em>：这样这门同时钉住两件事——
+     * 处理器还挂在线上（有人把注册摘掉它就红），以及投影在换了一具干净身体后真的把数值挂回去。
+     * "新身体"用 {@code removeModifiers()} 模拟：那正是新实体那张干净的属性表的样子。</p>
+     */
+    @GameTest
+    public void cardBonusesComeBackOnTheNewBodyAfterRespawn(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        Player owner = helper.makeMockSurvivalPlayer();
+        grant(helper, owner, "venom_edge");      // armor +10、move_speed +20%
+
+        CardCombat.stateOf(owner);               // 先投影一次，等价于"刚上线那一下"
+        double armorWithCard = armourOf(owner);
+        double speedWithCard = moveSpeed(owner);
+        helper.assertTrue(Math.abs(armorWithCard) > 1e-9,
+                "夹具没生效：投影之后护甲应该带着卡的那 10 点，实际 " + armorWithCard);
+
+        owner.getAttributes().getInstance(net.minecraft.world.entity.ai.attributes.Attributes.ARMOR)
+                .removeModifiers();
+        owner.getAttributes().getInstance(net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED)
+                .removeModifiers();
+        helper.assertTrue(Math.abs(armourOf(owner) - armorWithCard) > 1e-9
+                        && Math.abs(moveSpeed(owner) - speedWithCard) > 1e-9,
+                "夹具没把身体擦干净：这条测试的前提（新实体的属性表是空的）就没成立");
+
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(
+                new net.minecraftforge.event.entity.player.PlayerEvent.PlayerRespawnEvent(owner, false));
+        helper.assertTrue(Math.abs(armourOf(owner) - armorWithCard) < 1e-6,
+                "重生事件后护甲该回到 " + armorWithCard + "，实际 " + armourOf(owner)
+                        + "（处理器掉了，或投影没在重生时重算）");
+        helper.assertTrue(Math.abs(moveSpeed(owner) - speedWithCard) < 1e-9,
+                "移速也要一起回来，实际 " + moveSpeed(owner) + " 期望 " + speedWithCard);
+
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(
+                new net.minecraftforge.event.entity.player.PlayerEvent.PlayerLoggedInEvent(owner));
+        helper.assertTrue(Math.abs(armourOf(owner) - armorWithCard) < 1e-6,
+                "上线那一路同理，实际 " + armourOf(owner));
+
+        net.minecraftforge.common.MinecraftForge.EVENT_BUS.post(
+                new net.minecraftforge.event.entity.player.PlayerEvent.PlayerRespawnEvent(owner, false));
+        helper.assertTrue(Math.abs(armourOf(owner) - armorWithCard) < 1e-6,
+                "同一具身体连着两次投影不能把 +10 挂成 +20，实际 " + armourOf(owner));
+
+        helper.succeed();
+    }
+
+    /**
      * 强制精准：先实打实挨一下（拿窗口），再举盾出窗挡一下——那一下要按精准算、要攒到层。
      *
      * <p>与 {@code parryingWithinTheWindowGrantsTheReward} 成对：那张证"出窗不攒"，这张证
