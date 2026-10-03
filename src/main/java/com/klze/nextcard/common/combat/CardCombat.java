@@ -4,6 +4,7 @@ import com.klze.nextcard.NextCard;
 import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.CardAttributes;
 import com.klze.nextcard.common.player.PlayerCardState;
+import com.klze.nextcard.core.effect.ArmourPiercing;
 import com.klze.nextcard.core.effect.AttackPipeline;
 import com.klze.nextcard.core.effect.CritRules;
 import com.klze.nextcard.core.effect.DefencePipeline;
@@ -143,11 +144,44 @@ public final class CardCombat {
                 : victim.level().random.nextDouble();
     }
 
+    /**
+     * 护甲穿透：在原版算护甲<em>之前</em>把该无视的那部分借走，算完在
+     * {@link #onLivingDamage} 里立刻还。曲线仍然只由原版算一次——见
+     * {@link ArmourPiercing} 那段"为什么不自己算护甲"。
+     *
+     * <p>选 {@code LivingHurtEvent} 而不是更早的 {@code LivingAttackEvent}，是因为前者已经在
+     * 举盾抵消与无敌帧吞刀<em>之后</em>：那些情况下护甲压根没参与，借了就是白借（还得靠扫表兜底）。
+     * 唯一剩下的早退路径是"别人把这一发改成 0"，那条由每 tick 扫表收尾，最坏漏一 tick。</p>
+     */
+    @SubscribeEvent
+    public static void onLivingHurt(net.minecraftforge.event.entity.living.LivingHurtEvent hurt) {
+        DamageSource damageSource = hurt.getSource();
+        if (!(damageSource.getEntity() instanceof LivingEntity striker)) {
+            return;   // 摔落、火焰这类没有"攻击者"的伤害，谈不上穿透
+        }
+        State attacker = stateOf(striker);
+        if (attacker == null || attacker.profile() == null) {
+            return;
+        }
+        LivingEntity victim = hurt.getEntity();
+        double strip = ArmourPiercing.armorToStrip(victim.getAttributeValue(
+                net.minecraft.world.entity.ai.attributes.Attributes.ARMOR),
+                attacker.profile().channel("armor_pierce"));
+        if (strip > 0.0) {
+            TargetStates.applyArmourPierce(victim, striker.getUUID().toString(), strip,
+                    victim.level().getGameTime());
+        }
+    }
+
     @SubscribeEvent
     public static void onLivingDamage(LivingDamageEvent event) {
         DamageSource damageSource = event.getSource();
         Entity source = damageSource.getEntity();
         LivingEntity victim = event.getEntity();
+        if (source instanceof LivingEntity striker) {
+            // 护甲已经算完了，把借走的那部分还回去（不等扫表）
+            TargetStates.releaseArmourPierce(victim, striker.getUUID().toString());
+        }
         State attacker = stateOf(source);
         State defender = stateOf(victim);
         double incoming = event.getAmount();

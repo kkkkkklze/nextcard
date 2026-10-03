@@ -29,6 +29,11 @@
       "value": 0.1
     },
     {
+      "type": "mechanic_modifier",
+      "target": "channel.armor_pierce",
+      "value": 0.5
+    },
+    {
       "type": "trigger",
       "on": "attack",
       "actions": [

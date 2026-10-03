@@ -40,6 +40,15 @@ import java.util.UUID;
 @Mod.EventBusSubscriber(modid = NextCard.MODID, bus = Mod.EventBusSubscriber.Bus.FORGE)
 public final class TargetStates {
 
+    /** 减速修正的来源键前缀（同一张卡对同一个人只有一条）。 */
+    public static final String SLOW_FAMILY = "slow:";
+
+    /** 护甲穿透修正的来源键前缀（同一个攻击者对同一个人只有一条）。 */
+    public static final String ARMOR_FAMILY = "armor:";
+
+    /** "只服务这一发"的那一档：0.05 秒 = 1 tick，正常路径不等它。 */
+    public static final double ONE_TICK_SECONDS = 0.05;
+
     private record Entry(LivingEntity target, Attribute attribute, AttributeModifier modifier,
                          long expiresAtTick) {
     }
@@ -68,23 +77,60 @@ public final class TargetStates {
      */
     public static void applySlow(LivingEntity target, String sourceKey, double percent,
                                  double seconds, long nowTick) {
-        double amount = Slowness.amount(percent);
+        apply(target, Attributes.MOVEMENT_SPEED, SLOW_FAMILY + sourceKey, Slowness.amount(percent),
+                AttributeModifier.Operation.MULTIPLY_TOTAL, seconds, nowTick);
+    }
+
+    /**
+     * 临时摘掉目标这么多点护甲，只服务<em>这一发</em>：正常路径在 {@code LivingDamageEvent}
+     * 里 {@link #releaseArmourPierce} 摘掉，那条早退的路径（有人把伤害改成 0）由每 tick 扫表兜住，
+     * 所以最坏是"漏一 tick"而不是"永久减防"。
+     *
+     * <p>为什么要绕这么一圈：原版护甲曲线我们<em>不许再算一遍</em>（接管点在它之后，再算就是生效两次，
+     * 见 {@code DefencePipeline} 的类注释）。而 {@code LivingHurtEvent} 恰好就发在
+     * {@code getDamageAfterArmorAbsorb} 的<em>前一行</em>——于是"无视 30% 护甲"可以是
+     * "把那 30% 在算之前借走"，曲线仍然只由原版算。不需要 AT，也不需要 Mixin。</p>
+     */
+    public static void applyArmourPierce(LivingEntity target, String attackerKey, double points,
+                                         long nowTick) {
+        apply(target, Attributes.ARMOR, ARMOR_FAMILY + attackerKey, -Math.max(0.0, points),
+                AttributeModifier.Operation.ADDITION, ONE_TICK_SECONDS, nowTick);
+    }
+
+    /** 这一发算完护甲了，把借走的那部分还回去。 */
+    public static void releaseArmourPierce(LivingEntity target, String attackerKey) {
+        release(target, ARMOR_FAMILY + attackerKey);
+    }
+
+    /** 摘掉某个来源挂在这位身上的那条修正（没有就是没挂过，不报错）。 */
+    public static void release(LivingEntity target, String key) {
+        detach(active.remove(new Key(target.getUUID(), key)));
+    }
+
+    private static void apply(LivingEntity target, Attribute attribute, String key, double amount,
+                              AttributeModifier.Operation operation, double seconds, long nowTick) {
         if (amount == 0.0) {
-            return;   // 0 与负数的"减速"就是不减速，不挂一条空修正占位
+            return;   // 0 就是"什么都没改"，不挂一条空修正占位
         }
-        Attribute attribute = Attributes.MOVEMENT_SPEED;
         AttributeInstance instance = target.getAttribute(attribute);
         if (instance == null) {
-            return;   // 这个实体根本没有移速属性（不该挂，也不该编一个出来）
+            return;   // 这个实体根本没有那条属性（不该挂，也不该编一个出来）
         }
-        UUID id = Slowness.modifierId(sourceKey);
+        UUID id = idOf(key);
         instance.removeModifier(id);
-        AttributeModifier modifier = new AttributeModifier(id, "nextcard slow " + sourceKey,
-                amount, AttributeModifier.Operation.MULTIPLY_TOTAL);
+        AttributeModifier modifier = new AttributeModifier(id, "nextcard " + key, amount, operation);
         instance.addTransientModifier(modifier);
-        long expiresAt = nowTick + Cadence.ticksOf(seconds);   // 换算与下限都归 Cadence 管
-        active.put(new Key(target.getUUID(), sourceKey),
-                new Entry(target, attribute, modifier, expiresAt));
+        active.put(new Key(target.getUUID(), key),
+                new Entry(target, attribute, modifier, nowTick + Cadence.ticksOf(seconds)));
+    }
+
+    /**
+     * 修正的身份由来源键派生（v3 名字 UUID，格式与 {@code CardAttributes.idOf} 同一族）。
+     * 一个来源一个 UUID：换 UUID 就等于留下摘不掉的孤儿修正。
+     */
+    public static UUID idOf(String key) {
+        return UUID.nameUUIDFromBytes(
+                ("nextcard:target:" + key).getBytes(java.nio.charset.StandardCharsets.UTF_8));
     }
 
     /** 摘掉过期的那些。GameTest 手动拨表调用它，而不是等真 tick（等真 tick 的断言时绿时红）。 */

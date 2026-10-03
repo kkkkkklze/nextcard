@@ -1,9 +1,8 @@
 package com.klze.nextcard.logic;
 
+import com.klze.nextcard.common.combat.TargetStates;
 import com.klze.nextcard.core.effect.Slowness;
 import org.junit.jupiter.api.Test;
-
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -36,16 +35,19 @@ public class SlownessTest {
     }
 
     /**
-     * 修正的 UUID 由来源键派生：同一张卡永远同一个 id（刷新才摘得掉旧的），
-     * 不同来源必须不同（否则两张卡的减速会互相顶掉——那正是"同一 UUID 挂两次"的事故形状）。
+     * 修正的 UUID 由"来源键"派生（{@code TargetStates.idOf}，减速与护甲穿透共用同一套派生法）：
+     * 同一个来源永远同一个 id（刷新才摘得掉旧的），不同来源必须不同（否则两件事会互相顶掉——
+     * 那正是"同一 UUID 挂两次"的事故形状）。族前缀也在键里，所以减速与穿甲不会撞同一个 id。
      */
     @Test
     public void theModifierIdIsStablePerSourceAndDistinctAcrossSources() {
-        assertEquals(Slowness.modifierId("nextcard:grave_bloom"), Slowness.modifierId("nextcard:grave_bloom"),
-                "派生必须是纯函数");
-        assertNotEquals(Slowness.modifierId("nextcard:grave_bloom"),
-                Slowness.modifierId("nextcard:iron_root"));
-        UUID id = Slowness.modifierId("nextcard:grave_bloom");
-        assertEquals(3, id.version(), "必须是按名字派生的 UUID（v3），随机 UUID 摘不掉：" + id);
+        String bloom = TargetStates.SLOW_FAMILY + "nextcard:grave_bloom";
+        assertEquals(TargetStates.idOf(bloom), TargetStates.idOf(bloom), "派生必须是纯函数");
+        assertNotEquals(TargetStates.idOf(bloom),
+                TargetStates.idOf(TargetStates.SLOW_FAMILY + "nextcard:iron_root"));
+        assertNotEquals(TargetStates.idOf(bloom),
+                TargetStates.idOf(TargetStates.ARMOR_FAMILY + "abc"), "两族不能撞同一个 UUID");
+        assertEquals(3, TargetStates.idOf(bloom).version(),
+                "必须是按名字派生的 UUID（v3），随机 UUID 摘不掉");
     }
 }

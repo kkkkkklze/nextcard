@@ -1,8 +1,5 @@
 package com.klze.nextcard.core.effect;
 
-import java.nio.charset.StandardCharsets;
-import java.util.UUID;
-
 /**
  * 减速（{@code slow} 动作）的<em>纯算式</em>：卡面写的"减多少"要变成一条属性修正，
  * 而"减 30% 是不是 30%"这条判据必须能在不启动游戏的地方被证明。
@@ -11,18 +8,11 @@ import java.util.UUID;
  * （{@code MobEffects.MOVEMENT_SLOWDOWN}），用加法会与任何已存在的 buff 互相稀释，
  * 玩家看到的速度就不是卡面写的那个百分比。比值与点值不混这一条与
  * {@link Mechanics#FLAT_CHANNELS} 同律。</p>
+ *
+ * <p>修正的 UUID 派生不在这里——那是"挂在谁身上、一条还是两条"的事，归
+ * {@code TargetStates.idOf}（它同时管减速与护甲穿透两族，见 {@link ArmourPiercing}）。</p>
  */
 public final class Slowness {
-
-    /**
-     * 一张卡对同一个目标只有一条减速修正。UUID 由"来源键"派生，格式与
-     * {@code CardAttributes.idOf} 同一族（{@code nextcard:<族>:<名字>}）——
-     * 换一套派生法就会出现两条修正指向同一件事，摘不掉。
-     */
-    public static UUID modifierId(String sourceKey) {
-        return UUID.nameUUIDFromBytes(
-                ("nextcard:slow:" + sourceKey).getBytes(StandardCharsets.UTF_8));
-    }
 
     private Slowness() {
     }

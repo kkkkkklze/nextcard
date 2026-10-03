@@ -1129,6 +1129,46 @@ public class NextCardGameTests {
         return who.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED);
     }
 
+    /**
+     * 护甲穿透不改伤害公式，只改<em>原版算护甲时看到的那个值</em>：戴「毒刃」（{@code armor_pierce 0.5}）
+     * 的人打一个 10 甲靶子，掉血必须等于一个没卡的人打 5 甲靶子。这样断言里没有任何"我们把原版
+     * 曲线抄了一遍"的风险——曲线仍然只由原版算一次。
+     *
+     * <p>另一头钉的是<em>借了要还</em>：这一发算完，靶子的护甲属性要回到 10、{@code TargetStates}
+     * 的账要清零。漏还＝靶子永久减防，而且表现得很像"穿透真好用"。</p>
+     */
+    @GameTest
+    public void armourPierceBorrowsArmourForThisHitOnly(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        TargetStates.resetForTests();
+        Player piercer = helper.makeMockSurvivalPlayer();
+        grant(helper, piercer, "venom_edge");
+        Player plain = helper.makeMockSurvivalPlayer();
+
+        Player armoured = helper.makeMockSurvivalPlayer();
+        armoured.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.ARMOR)
+                .setBaseValue(10.0);
+        Player halfArmoured = helper.makeMockSurvivalPlayer();
+        halfArmoured.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.ARMOR)
+                .setBaseValue(5.0);
+
+        double pierced = dealtTo(armoured, piercer, 20.0F);
+        double againstHalf = dealtTo(halfArmoured, plain, 20.0F);
+        helper.assertTrue(pierced > 0.0, "前提：这一发真的落了地，实际 " + pierced);
+        helper.assertTrue(Math.abs(pierced - againstHalf) < 1e-3,
+                "无视 50% 护甲的 10 甲靶子，掉血要等于打 5 甲靶子：实际 " + pierced + " vs " + againstHalf);
+        helper.assertTrue(Math.abs(armourOf(armoured) - 10.0) < 1e-6,
+                "算完要当场还回去，否则就是永久减防，实际 " + armourOf(armoured));
+        helper.assertTrue(TargetStates.active() == 0, "穿甲那条修正不该留在账上");
+
+        helper.succeed();
+    }
+
+    /** 这位现在的护甲属性值。 */
+    private static double armourOf(Player who) {
+        return who.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.ARMOR);
+    }
+
     /** 摆一个朝指定朝向的受害者（yaw 0 = 朝 +Z，所以 +Z 那边站的人就是正面）。 */
     private static Player facing(GameTestHelper helper, net.minecraft.world.phys.Vec3 at, float yaw) {
         Player victim = helper.makeMockSurvivalPlayer();

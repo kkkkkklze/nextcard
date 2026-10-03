@@ -44,6 +44,7 @@ public final class NextCardLogicTestRunner {
             CritRulesTest.class,
             LifestealTest.class,
             SlownessTest.class,
+            ArmourPiercingTest.class,
     };
 
     private NextCardLogicTestRunner() {
