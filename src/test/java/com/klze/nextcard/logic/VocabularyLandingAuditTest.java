@@ -1,0 +1,223 @@
+package com.klze.nextcard.logic;
+
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.klze.nextcard.core.effect.Action;
+import com.klze.nextcard.core.effect.CounterStore;
+import com.klze.nextcard.core.effect.Facts;
+import com.klze.nextcard.core.effect.MechanicProfile;
+import com.klze.nextcard.core.effect.Mechanics;
+import com.klze.nextcard.core.effect.StackClause;
+import com.klze.nextcard.core.effect.TriggerClause;
+import com.klze.nextcard.core.effect.Triggers;
+import net.minecraft.resources.ResourceLocation;
+import org.junit.jupiter.api.Test;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.stream.Stream;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * 词表落点账（补二十四）：每一个注册过的通道与动作，要么<em>真的被消费</em>，要么<em>写进缺口名单</em>。
+ *
+ * <p>这张账盯的是本项目反复踩到的那一类错——词表先加了名，执行器没人补，于是"卡表那一列是空话"，
+ * 而表现方式恰好是"这张卡没用"（不报错、不红）。以前这条清单只写在 {@code docs/机制词表-已注册.md} 里，
+ * 靠人记得更新；今天它由代码推导：</p>
+ *
+ * <ul>
+ *   <li><b>通道</b>：有落点 = 要么在 {@link Mechanics#VANILLA_CHANNELS} 里（由 {@code CardAttributes}
+ *       投影成原版属性），要么引擎某处写着 {@code channel("<这个名字>")}。两边都查源码，
+ *       所以<em>读法里的拼写错误</em>也会被抓到（读一个没注册的通道永远返回 0，是静默的）。</li>
+ *   <li><b>动作</b>：有落点 = 把 {@link Action#types()} 里每一个动作喂进 {@link Triggers#fire} 跑一遍，
+ *       看它到底<em>产出了一样东西</em>（fired / extraHits / knockbacks / debuffs），还是报了
+ *       "引擎还没有执行器"。这里不查源码，查的是行为——所以"case 里什么都不做"这种空转执行器会红。</li>
+ * </ul>
+ *
+ * <p>两个方向的断言都是<em>等式</em>而不是"至少"：名单要变，必须有人改这里，改的时候就会想起同步文档。</p>
+ */
+public class VocabularyLandingAuditTest {
+
+    /** 已知缺口：它们要的是"伤害分类"这个原版没有的维度，不是再写一次乘法。 */
+    private static final Set<String> DECLARED_CHANNEL_GAPS = Set.of("physical_damage", "resistance");
+
+    /** 已知缺口：动作词表里注册了、但还没有执行器的六个（写上去会报"没有执行器"，不静默）。 */
+    private static final Set<String> DECLARED_ACTION_GAPS = Set.of(
+            "stun", "launch", "extra_resolve", "copy_attack", "ignore_armor", "interrupt");
+
+    /** 执行器报"没有执行器"的原话片段（改这句话要连这里一起改，别让它悄悄换词）。 */
+    private static final String NO_EXECUTOR = "引擎还没有执行器";
+
+    private static final Pattern CHANNEL_READ = Pattern.compile("channel\\(\"([a-z_]+)\"\\)");
+
+    // —— 账一：通道 ——
+
+    @Test
+    public void everyChannelIsEitherReadByTheEngineOrProjectedToAnAttribute() throws IOException {
+        Set<String> read = channelReads().keySet();
+        assertTrue(!Mechanics.VANILLA_CHANNELS.isEmpty(), "投影清单为空 = CardAttributes 那条路也断了");
+        assertTrue(read.size() >= 9,
+                "源码扫描只找到 " + read.size() + " 处通道读法，少于已知的 9 条——扫描本身失效了，"
+                        + "这道门会空转（先确认 nextcard.main.src 指向 src/main/java/com/klze/nextcard）");
+
+        Set<String> unlanded = new LinkedHashSet<>();
+        for (String channel : Mechanics.CHANNELS) {
+            if (Mechanics.VANILLA_CHANNELS.contains(channel) || read.contains(channel)) {
+                continue;
+            }
+            unlanded.add(channel);
+        }
+        assertEquals(DECLARED_CHANNEL_GAPS, unlanded,
+                "通道落点账对不上了。多出来的＝注册了词表名但没人读（卡写上去静默无效）；"
+                        + "少掉的＝已经有落点，请把这个名字从缺口名单和 docs/机制词表-已注册.md 里删掉。"
+                        + " 实际无落点：" + unlanded);
+    }
+
+    /**
+     * 反方向：引擎里每一处 {@code channel("x")} 都必须点名一个注册过的通道。
+     *
+     * <p>{@link MechanicProfile#channel} 读不到就回 0.0，所以一个拼错的读法不会报错——它只会让
+     * 那条乘区静默不生效，而且<em>卡表那边写对了也没用</em>（加载校验只认注册名，那个值根本进不来）。
+     * 这是本门唯一一处"查引擎自己"的断言：内容写错有加载门管，引擎写错只有这里管。</p>
+     */
+    @Test
+    public void everyChannelReadNamesARegisteredChannel() throws IOException {
+        Map<String, List<String>> reads = channelReads();
+        Set<String> unknown = new LinkedHashSet<>();
+        for (Map.Entry<String, List<String>> entry : reads.entrySet()) {
+            if (!Mechanics.CHANNELS.contains(entry.getKey())) {
+                unknown.add(entry.getKey() + " ← " + entry.getValue());
+            }
+        }
+        assertTrue(unknown.isEmpty(),
+                "引擎在读一个词表里没有的通道名（读不到恒为 0，静默）：" + unknown);
+    }
+
+    /** 通道名 → 读到它的那些文件（注释里的提及不算读法：注释不会让那条通道生效）。 */
+    private static Map<String, List<String>> channelReads() throws IOException {
+        Map<String, List<String>> reads = new LinkedHashMap<>();
+        Path root = mainSrc();
+        try (Stream<Path> walk = Files.walk(root)) {
+            List<Path> sources = walk.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".java"))
+                    .toList();
+            for (Path source : sources) {
+                for (String line : Files.readAllLines(source)) {
+                    String trimmed = line.trim();
+                    if (trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*")) {
+                        continue;
+                    }
+                    Matcher matcher = CHANNEL_READ.matcher(line);
+                    while (matcher.find()) {
+                        reads.computeIfAbsent(matcher.group(1), k -> new ArrayList<>())
+                                .add(source.getFileName() + ":" + line.trim());
+                    }
+                }
+            }
+        }
+        return reads;
+    }
+
+    // —— 账二：动作 ——
+
+    @Test
+    public void everyActionEitherExecutesOrIsDeclaredAsAGap() {
+        Set<String> gaps = new LinkedHashSet<>();
+        Map<String, String> hollow = new LinkedHashMap<>();
+        for (String type : Action.types()) {
+            Triggers.Result result = fireAction(type);
+            boolean reported = result.unsupported().stream().anyMatch(s -> s.contains(NO_EXECUTOR));
+            boolean produced = !result.fired().isEmpty() || !result.extraHits().isEmpty()
+                    || !result.knockbacks().isEmpty() || !result.debuffs().isEmpty();
+            if (reported && produced) {
+                hollow.put(type, "既报了「" + NO_EXECUTOR + "」又产出了东西（账要二选一）");
+            } else if (reported) {
+                gaps.add(type);
+            } else if (!produced) {
+                hollow.put(type, "没报缺口、也没产出任何效果——这就是静默跳过（case 里有分支但什么都不做）");
+            }
+        }
+        assertTrue(hollow.isEmpty(), "有空转的动作执行器：" + hollow);
+        assertEquals(DECLARED_ACTION_GAPS, gaps,
+                "动作落点账对不上了。多出来的＝词表注册了但既没执行器也没写进缺口名单；"
+                        + "少掉的＝已经落地，请把这个名字从缺口名单和 docs 里删掉。 实际无执行器：" + gaps);
+    }
+
+    /** 每个动作一条最小可用卡面——参数要给够，否则"兑现不出东西"与"没有执行器"分不开。 */
+    private static Triggers.Result fireAction(String type) {
+        Triggers.Bound entry = bound("audit_" + type,
+                "{\"type\":\"trigger\",\"on\":\"hit\",\"actions\":[{\"" + type + "\":" + body(type) + "}]}");
+        Map<String, StackClause> declared = new LinkedHashMap<>();
+        StackClause rule = stack("audit");
+        declared.put("audit", rule);
+        CounterStore counters = new CounterStore();
+        Triggers.Bases bases = new Triggers.Bases(10.0, 5.0, 4.0);
+        Triggers.Result result = Triggers.fire(Triggers.HIT, "player-1",
+                Facts.builder().attackerHp(0.1).with("fatal").build(),
+                List.of(entry), counters, Map.copyOf(declared), (MechanicProfile) null, bases, 0.0);
+        assertNotNull(result);
+        return result;
+    }
+
+    private static String body(String type) {
+        return switch (type) {
+            case "stacks" -> "{\"id\":\"audit\",\"amount\":1}";
+            case "damage" -> "{\"basis\":\"armor\",\"coefficient\":1.0}";
+            case "knockback" -> "{\"strength\":2}";
+            case "stun" -> "{\"seconds\":1}";
+            case "launch" -> "{\"landing_ratio\":0.5}";
+            case "slow" -> "{\"percent\":0.3,\"seconds\":2}";
+            case "reflect" -> "{\"ratio\":0.5,\"basis\":\"incoming\"}";
+            case "extra_resolve" -> "{\"count\":1}";
+            case "copy_attack" -> "{\"radius\":3}";
+            case "crit" -> "{}";
+            case "lethal_immunity" -> "{\"uses\":1,\"cooldown\":20}";
+            case "force_parry" -> "{\"seconds\":3}";
+            case "ignore_armor" -> "{\"ratio\":0.5}";
+            case "interrupt" -> "{\"seconds\":1}";
+            default -> throw new IllegalStateException("动作 " + type
+                    + " 没在这张账里登记最小卡面——新增动作要给 {@code body(type)} 补一行，"
+                    + "否则本门会直接抛而不是给出一条可读的失败");
+        };
+    }
+
+    // —— 夹具 ——
+
+    private static Path mainSrc() {
+        String value = System.getProperty("nextcard.main.src");
+        assertTrue(value != null, "nextcard.main.src must be provided by the logicTest or test task");
+        Path root = Path.of(value);
+        assertTrue(Files.isDirectory(root), "nextcard.main.src 不是目录：" + root);
+        return root;
+    }
+
+    private static Triggers.Bound bound(String path, String json) {
+        List<String> errors = new ArrayList<>();
+        TriggerClause clause = (TriggerClause) TriggerClause.parse(
+                JsonParser.parseString(json).getAsJsonObject(), errors);
+        assertTrue(errors.isEmpty(), json + " 应能解析: " + errors);
+        assertNotNull(clause);
+        return new Triggers.Bound(new ResourceLocation("nextcard", path), clause);
+    }
+
+    private static StackClause stack(String id) {
+        List<String> errors = new ArrayList<>();
+        JsonObject json = JsonParser.parseString("{\"type\":\"stacks\",\"id\":\"" + id
+                + "\",\"cap\":5,\"duration\":3}").getAsJsonObject();
+        StackClause clause = (StackClause) StackClause.parse(json, errors);
+        assertTrue(errors.isEmpty() && clause != null, errors.toString());
+        return clause;
+    }
+}

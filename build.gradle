@@ -235,6 +235,7 @@ tasks.register('logicTest', JavaExec) {
     jvmArgs '-Dfile.encoding=UTF-8',
             "-Dnextcard.content.dir=${file('src/main/resources/data/nextcard')}",
             "-Dnextcard.core.src=${file('src/main/java/com/klze/nextcard/core')}",
+            "-Dnextcard.main.src=${file('src/main/java/com/klze/nextcard')}",
             "-Dnextcard.test.src=${file('src/test/java')}"
     standardOutput = System.out
 }
@@ -255,11 +256,12 @@ def nonAsciiProjectPath = project.projectDir.absolutePath.chars()
 
 tasks.named('test', Test).configure {
     useJUnitPlatform()
-    // Same two inputs the logicTest JavaExec passes on the command line: without them the content
-    // parity / literal-audit tests fail their own "must be provided" assertions on CI, where :test
-    // is not skipped (ASCII path) and runs the JUnit platform.
+    // Same inputs the logicTest JavaExec passes on the command line: without them the content
+    // parity / literal-audit / vocabulary-landing tests fail their own "must be provided" assertions
+    // on CI, where :test is not skipped (ASCII path) and runs the JUnit platform.
     systemProperty 'nextcard.content.dir', file('src/main/resources/data/nextcard').absolutePath
     systemProperty 'nextcard.core.src', file('src/main/java/com/klze/nextcard/core').absolutePath
+    systemProperty 'nextcard.main.src', file('src/main/java/com/klze/nextcard').absolutePath
     systemProperty 'nextcard.test.src', file('src/test/java').absolutePath
     onlyIf {
         if (nonAsciiProjectPath) {
