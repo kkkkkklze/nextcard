@@ -4,6 +4,7 @@ import com.klze.nextcard.NextCard;
 import com.klze.nextcard.common.combat.CardCadence;
 import com.klze.nextcard.common.combat.CardCombat;
 import com.klze.nextcard.common.combat.CardDamageSource;
+import com.klze.nextcard.common.combat.TargetStates;
 import com.klze.nextcard.common.load.CardContentReload;
 import com.klze.nextcard.common.player.CardAttributes;
 import com.klze.nextcard.common.player.PlayerCardState;
@@ -577,7 +578,7 @@ public class NextCardGameTests {
         Triggers.Result plan = new Triggers.Result(null, java.util.List.of(),
                 java.util.List.of(new Triggers.ExtraHit(new ResourceLocation(NextCard.MODID, "storm_pulse"),
                         3.0, 0.0, Triggers.Target.AROUND_OWNER, "测试用：半径 0 且没有对面")),
-                java.util.List.of(), java.util.List.of());
+                java.util.List.of(), java.util.List.of(), java.util.List.of());
 
         CardCombat.perform(state, null, null, plan);
         helper.assertTrue(CardCombat.reportedGaps().stream()
@@ -1079,6 +1080,53 @@ public class NextCardGameTests {
                         + striker.getHealth() + "，目标掉血 " + total);
 
         helper.succeed();
+    }
+
+    /**
+     * 减速（{@code slow} 动作）真的作用在<em>被打中的那位</em>身上：「墓华」在造成伤害时缠住目标，
+     * 卡面写 30% / 2 秒，于是目标的移速属性正好剩 70%，两秒（40 tick）之后自己摘掉。
+     *
+     * <p>这条盯三件事：① 数值就是卡面那个数，不是原版药水那种"就近取整到级"
+     * （那正是我们不走 {@code MobEffect} 的原因，见 {@code TargetStates} 的类注释）；
+     * ② 修正挂在<em>直接目标</em>身上而不是持卡人；③ 到期真的摘掉——漏摘就是一条永久 debuff，
+     * 而玩家看到的只是"这怪怎么永远慢半拍"。</p>
+     *
+     * <p>时钟用 {@link TargetStates#run} 手动拨，理由与 {@code CardCadence} 那条一样：
+     * 等真 tick 的断言时绿时红。</p>
+     */
+    @GameTest
+    public void slowTakesTheLegsOffWhoActuallyGotHit(GameTestHelper helper) {
+        CardCombat.resetForTests();
+        TargetStates.resetForTests();
+        Player caster = helper.makeMockSurvivalPlayer();
+        grant(helper, caster, "grave_bloom");
+        Player victim = helper.makeMockSurvivalPlayer();
+        double before = moveSpeed(victim);
+        helper.assertTrue(before > 0.0, "前提：靶子本来就在走路，实际 " + before);
+
+        dealtTo(victim, caster, 10.0F);
+        double slowed = moveSpeed(victim);
+        helper.assertTrue(Math.abs(slowed - before * 0.7) < 1e-4,
+                "减 30% 之后要剩 70%，实际 " + slowed + "（原 " + before + "）");
+        helper.assertTrue(TargetStates.active() == 1,
+                "一张卡对一个人只有一条修正，实际 " + TargetStates.active());
+
+        long now = victim.level().getGameTime();
+        TargetStates.run(now + 39);
+        helper.assertTrue(Math.abs(moveSpeed(victim) - before * 0.7) < 1e-4,
+                "39 tick 还在窗口里（2 秒 = 40 tick）");
+        TargetStates.run(now + 41);
+        double restored = moveSpeed(victim);
+        helper.assertTrue(Math.abs(restored - before) < 1e-4,
+                "过点要当场摘干净，实际 " + restored + "，原 " + before);
+        helper.assertTrue(TargetStates.active() == 0, "账上不能留孤儿修正");
+
+        helper.succeed();
+    }
+
+    /** 这位现在的移速属性值（1.20.1 的映射名是 {@code MOVEMENT_SPEED}，不是 {@code MOVE_SPEED}）。 */
+    private static double moveSpeed(Player who) {
+        return who.getAttributeValue(net.minecraft.world.entity.ai.attributes.Attributes.MOVEMENT_SPEED);
     }
 
     /** 摆一个朝指定朝向的受害者（yaw 0 = 朝 +Z，所以 +Z 那边站的人就是正面）。 */

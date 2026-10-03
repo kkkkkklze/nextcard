@@ -358,10 +358,20 @@ public final class CardCombat {
      */
     public static void perform(@Nullable State actor, @Nullable LivingEntity directTarget,
                                 @Nullable Entity attacker, Triggers.Result result) {
-        if (actor == null || result.extraHits().isEmpty() && result.knockbacks().isEmpty()) {
+        if (actor == null || result.extraHits().isEmpty() && result.knockbacks().isEmpty()
+                && result.debuffs().isEmpty()) {
             return;
         }
         Player owner = actor.player();
+        for (Triggers.Debuff debuff : result.debuffs()) {
+            if (directTarget == null && noRadius(debuff.radius(), debuff.cardId(), "slow")) {
+                continue;
+            }
+            for (LivingEntity target : around(owner, directTarget, debuff.radius())) {
+                TargetStates.applySlow(target, debuff.cardId().toString(), debuff.percent(),
+                        debuff.seconds(), owner.level().getGameTime());
+            }
+        }
         for (Triggers.ExtraHit hit : result.extraHits()) {
             if (hit.target() == Triggers.Target.ATTACKER) {
                 // 反弹只还给打我的那位：找不到活体攻击者（箭、火、摔落）就是没对象，不搜半径

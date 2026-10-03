@@ -71,6 +71,9 @@ public final class Triggers {
     /** 动作：把<em>下一次攻击</em>武装成必定暴击（可再带一条临时暴伤）。 */
     public static final String CRIT = "crit";
 
+    /** 动作：让目标慢下来若干秒。 */
+    public static final String SLOW = "slow";
+
     /** 独立伤害打给谁。 */
     public enum Target {
         /** 以持卡人为圆心、按半径找活物（冲击波）。 */
@@ -145,25 +148,36 @@ public final class Triggers {
     }
 
     /**
+     * 要挂在目标身上的<em>带时长属性状态</em>（目前只有减速）。执行者是 {@code TargetStates}：
+     * 它自己管修正的 UUID、刷新与到期，本类只交"哪张卡发的、减多少、减多久、搜不搜半径"。
+     */
+    public record Debuff(ResourceLocation cardId, double percent, double seconds, double radius,
+                         String attribution) {
+    }
+
+    /**
      * 一次事件的全部结果。
      *
      * @param vetoReason  守方管线第①步要用的否决理由（没有任何免疫成立时为 null）
      * @param fired       引擎自己就已经做完的动作（免疫记账、层数增减）
      * @param extraHits   要接管点去落地的独立伤害
      * @param knockbacks  要接管点去落地的击退
+     * @param debuffs     要接管点去挂上的带时长状态（减速）
      * @param unsupported 解析通过但引擎还不执行的动作——必须让内容侧看得见
      */
     public record Result(@Nullable String vetoReason, List<Firing> fired, List<ExtraHit> extraHits,
-                         List<KnockbackHit> knockbacks, List<String> unsupported) {
+                         List<KnockbackHit> knockbacks, List<Debuff> debuffs, List<String> unsupported) {
 
         public Result {
             fired = List.copyOf(fired);
             extraHits = List.copyOf(extraHits);
             knockbacks = List.copyOf(knockbacks);
+            debuffs = List.copyOf(debuffs);
             unsupported = List.copyOf(unsupported);
         }
 
-        public static final Result NOTHING = new Result(null, List.of(), List.of(), List.of(), List.of());
+        public static final Result NOTHING =
+                new Result(null, List.of(), List.of(), List.of(), List.of(), List.of());
     }
 
     private Triggers() {
@@ -209,6 +223,7 @@ public final class Triggers {
         List<Firing> fired = new ArrayList<>();
         List<ExtraHit> extraHits = new ArrayList<>();
         List<KnockbackHit> knockbacks = new ArrayList<>();
+        List<Debuff> debuffs = new ArrayList<>();
         List<String> unsupported = new ArrayList<>();
         for (Bound entry : ordered) {
             TriggerClause clause = entry.clause();
@@ -266,12 +281,18 @@ public final class Triggers {
                             fired.add(new Firing(entry.cardId(), action, reason));
                         }
                     }
+                    case SLOW -> {
+                        String reason = planSlow(entry, action, debuffs, unsupported);
+                        if (reason != null) {
+                            fired.add(new Firing(entry.cardId(), action, reason));
+                        }
+                    }
                     default -> unsupported.add(entry.cardId() + " 的 " + action.type()
                             + "（词表里有，引擎还没有执行器）");
                 }
             }
         }
-        return new Result(veto, fired, extraHits, knockbacks, unsupported);
+        return new Result(veto, fired, extraHits, knockbacks, debuffs, unsupported);
     }
 
     /**
@@ -522,6 +543,27 @@ public final class Triggers {
             }
         }
         return fallback;
+    }
+
+    /**
+     * 减速：把卡面那个百分比交出去，由 {@code TargetStates} 挂成一条
+     * {@code MULTIPLY_TOTAL} 的属性修正（算式与夹取在 {@link Slowness}，那边可无头断言）。
+     *
+     * <p>减不出东西（比例 ≤ 0）要<em>报出来</em>，不静默不发——与 {@code damage} 的 0 基数同一条律。</p>
+     */
+    private static @Nullable String planSlow(Bound entry, Action action, List<Debuff> out,
+                                             List<String> unsupported) {
+        double percent = action.number("percent", 0.0);
+        double seconds = action.number("seconds", 0.0);
+        double radius = Math.max(0.0, action.number("radius", 0.0));
+        if (Slowness.clamped(percent) <= 0.0) {
+            unsupported.add(entry.cardId() + " 的 slow：比例 " + percent + " 减不出任何东西");
+            return null;
+        }
+        out.add(new Debuff(entry.cardId(), percent, seconds, radius,
+                "减速 " + rounded(Slowness.clamped(percent) * 100.0) + "%"));
+        return "把目标放慢 " + rounded(Slowness.clamped(percent) * 100.0) + "%，"
+                + rounded(seconds) + " 秒";
     }
 
     private static String basisText(String basis) {

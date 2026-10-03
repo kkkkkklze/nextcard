@@ -27,6 +27,12 @@
             "id": "bloom",
             "amount": 1
           }
+        },
+        {
+          "slow": {
+            "percent": 0.3,
+            "seconds": 2.0
+          }
         }
       ]
     },
