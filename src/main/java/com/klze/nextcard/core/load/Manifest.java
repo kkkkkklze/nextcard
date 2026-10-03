@@ -3,6 +3,7 @@ package com.klze.nextcard.core.load;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.serialization.Codec;
+import com.mojang.serialization.JsonOps;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 
 import java.util.ArrayList;
@@ -33,6 +34,37 @@ public record Manifest(RemoveItem removeItem, Combat combat) {
             "remove_item.refund_draws", REFUND_DRAWS,
             "remove_item.consume_survival", CONSUME_SURVIVAL,
             "combat.block_reduction", BLOCK_REDUCTION);
+
+    /**
+     * 读一份总表，把<em>缺席</em>与<em>写坏</em>分开判——这两件事的含义相反：
+     *
+     * <ul>
+     *   <li><b>缺席 + 整包内容也是空的</b>（卡数 0）＝合法状态。铁律一要求"删光
+     *       {@code data/nextcard/} 引擎照跑"，那种情况下每次 reload 都报一条错误就是拿内容反过来
+     *       约束结构。</li>
+     *   <li><b>缺席 + 有卡</b>＝错误。带卡的内容包却没带这份全局策略，只可能是文件名写错或漏打包，
+     *       静默用默认值等于"手感数悄悄变了"。</li>
+     *   <li><b>在场但非法</b>（越界、类型错、未知键）＝永远是错误。{@code optionalFieldOf} 会把
+     *       非法值吞成"没写"（{@code OptionalFieldCodec#decode}：子 codec 失败返回
+     *       {@code success(empty)}），所以值的合法性只能靠 {@link #validate} 在 codec 外面查。</li>
+     * </ul>
+     */
+    public static LoadResult<Manifest> read(JsonElement raw, int cardFiles) {
+        if (raw == null) {
+            return cardFiles == 0
+                    ? new LoadResult<>(DEFAULT, List.of())
+                    : new LoadResult<>(DEFAULT, List.of(MANIFEST_FILE
+                            + "：有 " + cardFiles + " 张卡却没有这份全局策略（文件名写错或漏打包）"));
+        }
+        List<String> errors = new ArrayList<>(validate(raw));
+        Manifest decoded = CODEC.parse(JsonOps.INSTANCE, raw)
+                .resultOrPartial(msg -> errors.add(MANIFEST_FILE + ": " + msg))
+                .orElse(DEFAULT);
+        return new LoadResult<>(decoded, errors);
+    }
+
+    /** 这份策略的文件名（缺席与非法两条报错都用它点名）。 */
+    public static final String MANIFEST_FILE = "manifest.json";
 
     /**
      * codec 之外的第二道，加载时<em>先</em>跑它：返回错误清单，空 = 放行。

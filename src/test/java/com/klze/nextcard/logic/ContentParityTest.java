@@ -176,4 +176,31 @@ public class ContentParityTest {
                 .result().orElseThrow().combat().blockReduction(), 1e-9,
                 "整段缺省时回到 1.0（缺省 = 不改手感，不是悄悄改成别的数）");
     }
+
+    /**
+     * 铁律一（删光 {@code data/nextcard/} 引擎照跑）也会被 manifest 这条破掉：上一批把
+     * <em>这份文件不存在</em>一律判成错误，于是空内容包每次 reload 都报一条——那正是
+     * "内容反过来约束结构"的形状。缺席与写坏必须分开判，三种情形各钉一条。
+     */
+    @Test
+    public void anAbsentManifestIsOnlyAnErrorWhenThereIsContent() {
+        LoadResult<Manifest> emptyPack = Manifest.read(null, 0);
+        assertTrue(emptyPack.ok(), "整包内容都没了时缺席是合法状态：" + emptyPack.errors());
+        assertEquals(1.0, emptyPack.value().combat().blockReduction(), 1e-9,
+                "这时用的就是出厂那个 1.0（= 与原版一致）");
+
+        LoadResult<Manifest> cardsWithoutManifest = Manifest.read(null, 3);
+        assertEquals(1, cardsWithoutManifest.errors().size(), "有卡而没这份总表 = 打包漏了，必须报错");
+        assertTrue(cardsWithoutManifest.errors().get(0).contains("manifest.json"),
+                "报错要点名是哪份文件：" + cardsWithoutManifest.errors());
+
+        LoadResult<Manifest> broken = Manifest.read(JsonParser.parseString(
+                "{\"combat\": {\"block_reduction\": 1.5}}"), 3);
+        assertEquals(1, broken.errors().size(), "写坏了永远是错误，不许当成没写：" + broken.errors());
+
+        LoadResult<Manifest> fine = Manifest.read(JsonParser.parseString(
+                "{\"combat\": {\"block_reduction\": 0.2}}"), 3);
+        assertTrue(fine.ok(), "合法内容不该报错：" + fine.errors());
+        assertEquals(0.2, fine.value().combat().blockReduction(), 1e-9);
+    }
 }

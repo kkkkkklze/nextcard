@@ -10,7 +10,6 @@ import com.klze.nextcard.core.load.ContentReader;
 import com.klze.nextcard.core.load.LoadResult;
 import com.klze.nextcard.core.load.Manifest;
 import com.klze.nextcard.core.tag.TagIndex;
-import com.mojang.serialization.JsonOps;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -47,9 +46,6 @@ public final class CardContentReload extends SimplePreparableReloadListener<Card
 
     public static final String CARD_DIR = "cards";
     public static final String TAG_DIR = "card_tags";
-
-    /** 全局策略那一份（{@code data/nextcard/manifest.json}）：移除策略 + 战斗手感数。 */
-    public static final String MANIFEST_FILE = "manifest.json";
 
     private static final CardContentReload INSTANCE = new CardContentReload();
     private static volatile ContentBundle current = ContentBundle.EMPTY;
@@ -105,32 +101,29 @@ public final class CardContentReload extends SimplePreparableReloadListener<Card
             return new Result(ContentBundle.EMPTY, errors, parseFailures);
         }
         // 全局策略跟着同一份快照换：它里面有战斗手感数（格挡到底减多少），
-        // 半份新半份旧会出现"卡按旧策略折、格挡按新数挡"。读不到或读错都是错误，
-        // 不"当它没写"——那正是 DFU optionalFieldOf 吞非法值那一类陷阱。
-        Manifest manifest = Manifest.DEFAULT;
+        // 半份新半份旧会出现"卡按旧策略折、格挡按新数挡"。
+        // "缺席"与"写坏"分开判（见 Manifest#read）：整包内容是空的时缺席合法（铁律一：删光
+        // data/nextcard 引擎照跑），有卡却没这份文件才是错误；写坏了永远是错误，不"当它没写"。
+        JsonElement manifestJson = null;
         try {
             Optional<Resource> file = manager.getResource(
-                    new ResourceLocation(NextCard.MODID, MANIFEST_FILE));
+                    new ResourceLocation(NextCard.MODID, Manifest.MANIFEST_FILE));
             if (file.isPresent()) {
                 try (Reader reader = file.get().openAsReader()) {
-                    JsonElement parsed = JsonParser.parseReader(reader);
-                    // codec 之前先过 strict：越界/类型错的值在 optionalFieldOf 里会被吞成"没写"
-                    errors.addAll(Manifest.validate(parsed));
-                    manifest = Manifest.CODEC.parse(JsonOps.INSTANCE, parsed)
-                            .resultOrPartial(msg -> errors.add(MANIFEST_FILE + ": " + msg))
-                            .orElse(manifest);
+                    manifestJson = JsonParser.parseReader(reader);
                 }
-            } else {
-                errors.add(MANIFEST_FILE + ": 缺这份全局策略（宁可保留上一版，不要静默用默认值）");
             }
         } catch (IOException e) {
-            errors.add(MANIFEST_FILE + ": 读不出来 " + e);
+            errors.add(Manifest.MANIFEST_FILE + ": 读不出来 " + e);
         }
+        LoadResult<Manifest> manifest = Manifest.read(manifestJson, cardFiles.value().size());
+        errors.addAll(manifest.errors());
         if (!errors.isEmpty()) {
             return new Result(ContentBundle.EMPTY, errors, parseFailures);
         }
         return new Result(new ContentBundle(tags.value(), cards.value(),
-                tagFiles.value().size(), cardFiles.value().size(), manifest), List.of(), parseFailures);
+                tagFiles.value().size(), cardFiles.value().size(), manifest.value()),
+                List.of(), parseFailures);
     }
 
     @Override
