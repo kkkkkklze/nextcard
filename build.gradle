@@ -236,6 +236,7 @@ tasks.register('logicTest', JavaExec) {
             "-Dnextcard.content.dir=${file('src/main/resources/data/nextcard')}",
             "-Dnextcard.core.src=${file('src/main/java/com/klze/nextcard/core')}",
             "-Dnextcard.main.src=${file('src/main/java/com/klze/nextcard')}",
+            "-Dnextcard.docs.dir=${file('docs')}",
             "-Dnextcard.test.src=${file('src/test/java')}"
     standardOutput = System.out
 }
@@ -262,6 +263,7 @@ tasks.named('test', Test).configure {
     systemProperty 'nextcard.content.dir', file('src/main/resources/data/nextcard').absolutePath
     systemProperty 'nextcard.core.src', file('src/main/java/com/klze/nextcard/core').absolutePath
     systemProperty 'nextcard.main.src', file('src/main/java/com/klze/nextcard').absolutePath
+    systemProperty 'nextcard.docs.dir', file('docs').absolutePath
     systemProperty 'nextcard.test.src', file('src/test/java').absolutePath
     onlyIf {
         if (nonAsciiProjectPath) {

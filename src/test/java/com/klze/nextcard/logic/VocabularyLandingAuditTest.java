@@ -106,6 +106,16 @@ public class VocabularyLandingAuditTest {
                 "源码扫描只找到 " + read.size() + " 处通道读法，少于已知的 9 条——扫描本身失效了，"
                         + "这道门会空转（先确认 nextcard.main.src 指向 src/main/java/com/klze/nextcard）");
 
+        Set<String> unlanded = computedChannelGaps();
+        assertEquals(DECLARED_CHANNEL_GAPS, unlanded,
+                "通道落点账对不上了。多出来的＝注册了词表名但没人读（卡写上去静默无效）；"
+                        + "少掉的＝已经有落点，请把这个名字从缺口名单和 docs/机制词表-已注册.md 里删掉。"
+                        + " 实际无落点：" + unlanded);
+    }
+
+    /** 没有落点的通道名（投影清单里没有、也没人 {@code channel("…")}）。 */
+    private static Set<String> computedChannelGaps() throws IOException {
+        Set<String> read = channelReads().keySet();
         Set<String> unlanded = new LinkedHashSet<>();
         for (String channel : Mechanics.CHANNELS) {
             if (Mechanics.VANILLA_CHANNELS.contains(channel) || read.contains(channel)) {
@@ -113,10 +123,7 @@ public class VocabularyLandingAuditTest {
             }
             unlanded.add(channel);
         }
-        assertEquals(DECLARED_CHANNEL_GAPS, unlanded,
-                "通道落点账对不上了。多出来的＝注册了词表名但没人读（卡写上去静默无效）；"
-                        + "少掉的＝已经有落点，请把这个名字从缺口名单和 docs/机制词表-已注册.md 里删掉。"
-                        + " 实际无落点：" + unlanded);
+        return unlanded;
     }
 
     /**
@@ -168,8 +175,20 @@ public class VocabularyLandingAuditTest {
 
     @Test
     public void everyActionEitherExecutesOrIsDeclaredAsAGap() {
-        Set<String> gaps = new LinkedHashSet<>();
         Map<String, String> hollow = new LinkedHashMap<>();
+        Set<String> gaps = computedActionGaps(hollow);
+        assertTrue(hollow.isEmpty(), "有空转的动作执行器：" + hollow);
+        assertEquals(DECLARED_ACTION_GAPS, gaps,
+                "动作落点账对不上了。多出来的＝词表注册了但既没执行器也没写进缺口名单；"
+                        + "少掉的＝已经落地，请把这个名字从缺口名单和 docs 里删掉。 实际无执行器：" + gaps);
+    }
+
+    /**
+     * 跑一遍每个注册动作，收"报了没有执行器"的那些；同时把"既没产出也没报缺口"（空转）
+     * 与"两边都占"记进 {@code hollow}。
+     */
+    private static Set<String> computedActionGaps(Map<String, String> hollow) {
+        Set<String> gaps = new LinkedHashSet<>();
         for (String type : Action.types()) {
             Triggers.Result result = fireAction(type);
             boolean reported = result.unsupported().stream().anyMatch(s -> s.contains(NO_EXECUTOR));
@@ -183,10 +202,7 @@ public class VocabularyLandingAuditTest {
                 hollow.put(type, "没报缺口、也没产出任何效果——这就是静默跳过（case 里有分支但什么都不做）");
             }
         }
-        assertTrue(hollow.isEmpty(), "有空转的动作执行器：" + hollow);
-        assertEquals(DECLARED_ACTION_GAPS, gaps,
-                "动作落点账对不上了。多出来的＝词表注册了但既没执行器也没写进缺口名单；"
-                        + "少掉的＝已经落地，请把这个名字从缺口名单和 docs 里删掉。 实际无执行器：" + gaps);
+        return gaps;
     }
 
     // —— 账三：事实开关（判据读得到 vs 世界侧填得到）——
@@ -258,6 +274,14 @@ public class VocabularyLandingAuditTest {
      */
     @Test
     public void everyFactFieldHasAProducer() throws IOException {
+        Set<String> unproduced = unproducedFields();
+        assertEquals(DECLARED_FIELD_GAPS, unproduced,
+                "事实字段的出处账对不上了。多出来的＝引擎有槽位但整条 main 没人填（读它的条件恒按默认值）；"
+                        + "少掉的＝已经有人填了，把名字从缺口名单与 docs 里删掉。 实际没出处：" + unproduced);
+    }
+
+    /** {@code Facts.Builder} 上没人带参数调用过的 setter（＝那个字段永远交回默认值）。 */
+    private static Set<String> unproducedFields() throws IOException {
         String main = textOf(mainSrc());
         Set<String> unproduced = new LinkedHashSet<>();
         for (String setter : builderSetters()) {
@@ -265,9 +289,7 @@ public class VocabularyLandingAuditTest {
                 unproduced.add(setter);
             }
         }
-        assertEquals(DECLARED_FIELD_GAPS, unproduced,
-                "事实字段的出处账对不上了。多出来的＝引擎有槽位但整条 main 没人填（读它的条件恒按默认值）；"
-                        + "少掉的＝已经有人填了，把名字从缺口名单与 docs 里删掉。 实际没出处：" + unproduced);
+        return unproduced;
     }
 
     // —— 账五：事件（注册了名字 vs 世界侧真有人派）——
@@ -448,6 +470,71 @@ public class VocabularyLandingAuditTest {
                     + "否则本门会直接抛而不是给出一条可读的失败");
         };
     }
+
+    // —— 账六：文档里那行数字必须就是门算出来的那组 ——
+
+    /**
+     * 《机制词表》顶部那行 <b>落点账</b>（<code>通道 15/17 · 动作 8/14 · …</code>）由本门逐数核对。
+     *
+     * <p>前五本账把事实算出来了，可它们对外说话仍然靠我往文档里手抄一遍数字——第五批了，
+     * 每批都可能忘。这一条把那句话也变成会红的：<em>分子</em>从上面的判据当场重算，
+     * <em>分母</em>从注册表当场取，所以"改代码忘了改文档"和"改文档蒙过代码"两头都堵。
+     * 形状对不上（被删了、被改写、出现两次）也算红——那等于这句话没人核了。</p>
+     */
+    @Test
+    public void theVocabularyDocCarriesTheSameCountsTheLedgersCompute() throws IOException {
+        String docs = System.getProperty("nextcard.docs.dir");
+        assertTrue(docs != null, "nextcard.docs.dir must be provided by the logicTest or test task");
+        Path doc = Path.of(docs, "机制词表-已注册.md");
+        assertTrue(Files.isRegularFile(doc), "找不到落点账那行所在的文档：" + doc);
+        String text = Files.readString(doc);
+
+        Matcher matcher = DOC_LEDGER_LINE.matcher(text);
+        assertTrue(matcher.find(),
+                "docs/机制词表-已注册.md 里找不到那行 **落点账**（被删了或形状改了——这句现在没人核了）");
+        // 先把十个数取走再查重：Matcher.find() 失败会把这次匹配清掉，之后再 group() 就是
+        // "No match found"（这条夹具自己的错是本门第一次跑替我抓出来的）。
+        String[] counted = new String[10];
+        for (int i = 0; i < counted.length; i++) {
+            counted[i] = matcher.group(i + 1);
+        }
+        int repeats = 0;
+        while (matcher.find()) {
+            repeats++;
+        }
+        assertTrue(repeats == 0, "落点账那行出现了 " + (repeats + 1) + " 次，文档要只有一份真相");
+
+        String[][] want = {
+                {"通道", String.valueOf(Mechanics.CHANNELS.size() - computedChannelGaps().size()),
+                        String.valueOf(Mechanics.CHANNELS.size())},
+                {"动作", String.valueOf(Action.types().size() - computedActionGaps(new LinkedHashMap<>()).size()),
+                        String.valueOf(Action.types().size())},
+                {"事件", String.valueOf(dispatchedCount()), String.valueOf(eventNames().size())},
+                {"开关有人答", String.valueOf(intersect(Facts.FLAG_NAMES, flagWrites()).size()),
+                        String.valueOf(Facts.FLAG_NAMES.size())},
+                {"字段有人填", String.valueOf(builderSetters().size() - unproducedFields().size()),
+                        String.valueOf(builderSetters().size())},
+        };
+        for (int i = 0; i < want.length; i++) {
+            assertEquals(want[i][1] + "/" + want[i][2],
+                    counted[i * 2] + "/" + counted[i * 2 + 1],
+                    "文档里的「" + want[i][0] + "」与门算出来的不一致（改了代码忘了改文档，或改了文档想蒙过代码）");
+        }
+    }
+
+    private static int dispatchedCount() throws IOException {
+        return dispatchedEvents(textOf(mainSrc().resolve("common")), eventNames(), stringConstants()).size();
+    }
+
+    private static Set<String> intersect(Set<String> left, Set<String> right) {
+        Set<String> out = new LinkedHashSet<>(left);
+        out.retainAll(right);
+        return out;
+    }
+
+    private static final Pattern DOC_LEDGER_LINE = Pattern.compile(
+            "\\*\\*落点账\\*\\* `通道 (\\d+)/(\\d+) · 动作 (\\d+)/(\\d+) · 事件 (\\d+)/(\\d+)"
+                    + " · 开关有人答 (\\d+)/(\\d+) · 字段有人填 (\\d+)/(\\d+)`");
 
     // —— 夹具 ——
 
