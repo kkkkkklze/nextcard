@@ -369,10 +369,12 @@ public final class CardCombat {
         double window = ParryTiming.windowSeconds(parry.param("base_window", 0.0), profile);
         boolean forced = Triggers.forcedPrecise(defender.holder(), defender.triggers(), HOST.counters(),
                 defender.nowSeconds());
-        String which = forced || ParryTiming.precise(ticksBlocking(owner), window)
-                ? Triggers.PARRY_SUCCESS : Triggers.BLOCK_SUCCESS;
+        boolean precise = forced || ParryTiming.precise(ticksBlocking(owner), window);
+        // 事件名写在派发点上（而不是先存进一个变量再传进去）：《词表落点账》第五本靠读派发点
+        // 认"这个事件今天到底有没有人叫"，名字藏在变量里就等于账上看不见。
         Triggers.Result result = fire(defender,
-                DamageContact.defendView(owner, damageSource.getEntity(), incoming), which,
+                DamageContact.defendView(owner, damageSource.getEntity(), incoming),
+                precise ? Triggers.PARRY_SUCCESS : Triggers.BLOCK_SUCCESS,
                 basesOf(defender, incoming));
         perform(defender, owner, damageSource.getEntity(), result);
     }

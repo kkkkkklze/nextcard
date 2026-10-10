@@ -74,6 +74,20 @@ public class VocabularyLandingAuditTest {
     /** 已知缺口：{@code Facts.Builder} 上有 setter、但整条 main 里没人调用（该字段恒为默认值）。 */
     private static final Set<String> DECLARED_FIELD_GAPS = Set.of("noise", "chargeSeconds");
 
+    /**
+     * 已知缺口：注册了事件名、但世界侧没有派发点会叫醒它（{@code on: "<这个名字>"} 的卡永不响）。
+     *
+     * <p>这七条各有出处：{@code parry_fail} 等的是"弹反失败要不要给收益"的口径；
+     * {@code charge_release} / {@code charge_interrupt} / {@code control_immune} 等的是蓄力与控制的
+     * <em>输入通道</em>；{@code shield_down} 等的是破盾判定；{@code stand_still} 等的是"站定多久才算"
+     * 那句阈值；{@code skill_cast} 等的是技能栏（powerlevel 那侧有 20 张卡压着）。
+     * 名字<em>先注册</em>是允许的（词表先冻结、执行器后补），但"注册了却没人派"这件事
+     * 从前只写在文档里，现在由门算。</p>
+     */
+    private static final Set<String> DECLARED_UNDISPATCHED_EVENTS = Set.of(
+            "parry_fail", "charge_release", "charge_interrupt", "control_immune",
+            "shield_down", "stand_still", "skill_cast");
+
     /** {@code facts.flag("target_" + text)} 这一族：读法写在 {@code Condition} 里，取值由 TARGET_STATES 拼。 */
     private static final String TARGET_FLAG_PREFIX = "flag(\"target_\"";
 
@@ -254,6 +268,92 @@ public class VocabularyLandingAuditTest {
         assertEquals(DECLARED_FIELD_GAPS, unproduced,
                 "事实字段的出处账对不上了。多出来的＝引擎有槽位但整条 main 没人填（读它的条件恒按默认值）；"
                         + "少掉的＝已经有人填了，把名字从缺口名单与 docs 里删掉。 实际没出处：" + unproduced);
+    }
+
+    // —— 账五：事件（注册了名字 vs 世界侧真有人派）——
+
+    /**
+     * 15 个注册事件里，今天只有 8 个真能被叫醒——这句话从前是一段人手写的表格，现在是一条等式。
+     *
+     * <p>判据：{@code common/} 里每个 {@code fire(} 调用点往后看到分号，那段里出现的
+     * <em>已注册事件名</em>（字面量）或<em>值等于已注册事件名的字符串常量</em>（{@code Triggers.HIT}、
+     * {@code TICK_EVENT} 这类）就算"这个事件有人派"。用常量表是因为派发点几乎不写字面量——
+     * 直接扫 {@code "hit"} 会漏掉九个里的八个，那比没门更糟（它会假装看得见）。</p>
+     *
+     * <p>反向那一半<em>不</em>在这本账里：派发点叫了一个没注册的事件名，本门<em>看不见</em>。
+     * 要看见它得解析 {@code fire(...)} 的参数位置（{@code Triggers.fire} 的事件在第一格、
+     * {@code CardCombat.fire} 在第三格），文本扫描分不开。这件事的后果也不是"卡静默不响"而是
+     * "那条派发是死代码"——卡那边写不出那个名字（加载期只认注册名），所以先认这个边界，
+     * 不假装看得见。</p>
+     */
+    @Test
+    public void everyRegisteredEventIsEitherDispatchedOrDeclaredUndispatched() throws IOException {
+        Set<String> registered = eventNames();
+        assertTrue(registered.size() >= 15,
+                "只枚举到 " + registered.size() + " 个事件槽位——Mechanics 的槽位表变了，这本账的靶子要重钉");
+        String world = textOf(mainSrc().resolve("common"));
+        Set<String> dispatched = dispatchedEvents(world, registered, stringConstants());
+        assertTrue(dispatched.size() >= 8,
+                "只数到 " + dispatched.size() + " 个被派发的事件（" + dispatched
+                        + "）——派发点的形状变了，这本账会看不见东西而不是报错");
+
+        Set<String> undispatched = new LinkedHashSet<>(registered);
+        undispatched.removeAll(dispatched);
+        assertEquals(DECLARED_UNDISPATCHED_EVENTS, undispatched,
+                "事件派发账对不上了。多出来的＝注册了名字但没人派（on 写它的卡永不响）；"
+                        + "少掉的＝已经有人派了，把名字从缺口名单与 docs/挂点覆盖表 里删掉。 实际没人派："
+                        + undispatched);
+    }
+
+    private static Set<String> eventNames() {
+        Set<String> out = new LinkedHashSet<>();
+        for (String id : Mechanics.ids()) {
+            Mechanics.Slot slot = Mechanics.slot(id);
+            if (slot != null && slot.kind() == Mechanics.Kind.EVENT) {
+                out.add(id);
+            }
+        }
+        return out;
+    }
+
+    /** main 里所有 {@code static final String NAME = "value"} 的 NAME→value（用来认派发点写的常量）。 */
+    private static Map<String, String> stringConstants() throws IOException {
+        Pattern declaration = Pattern.compile("static final String ([A-Z_]+) = \"([a-z_]+)\"");
+        Map<String, String> out = new LinkedHashMap<>();
+        try (Stream<Path> walk = Files.walk(mainSrc())) {
+            for (Path file : walk.filter(Files::isRegularFile)
+                    .filter(p -> p.toString().endsWith(".java")).toList()) {
+                Matcher matcher = declaration.matcher(Files.readString(file));
+                while (matcher.find()) {
+                    out.put(matcher.group(1), matcher.group(2));
+                }
+            }
+        }
+        return out;
+    }
+
+    private static Set<String> dispatchedEvents(String world, Set<String> registered,
+                                                Map<String, String> constants) {
+        Set<String> dispatched = new LinkedHashSet<>();
+        Pattern literal = Pattern.compile("\"([a-z_]+)\"");
+        for (int at = world.indexOf("fire("); at >= 0; at = world.indexOf("fire(", at + 1)) {
+            int stop = world.indexOf(';', at);
+            String window = world.substring(at, stop < 0 ? Math.min(at + 260, world.length())
+                    : Math.min(stop, at + 900));
+            Matcher quote = literal.matcher(window);
+            while (quote.find()) {
+                if (registered.contains(quote.group(1))) {
+                    dispatched.add(quote.group(1));
+                }
+            }
+            for (Map.Entry<String, String> constant : constants.entrySet()) {
+                if (registered.contains(constant.getValue())
+                        && Pattern.compile("\\b" + constant.getKey() + "\\b").matcher(window).find()) {
+                    dispatched.add(constant.getValue());
+                }
+            }
+        }
+        return dispatched;
     }
 
     /** 单参数（或多参）的 Builder setter；{@code with} 归账三，两个 map 形状的不归这里。 */
